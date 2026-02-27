@@ -166,7 +166,7 @@ You: Build pages for the project management module.
 Claude: (activates page-building skill → creates menu → builds each page with tables, forms, KPIs, popups)
 ```
 
-## MCP Tools (41)
+## MCP Tools (48)
 
 ### Data Modeling (7)
 | Tool | Description |
@@ -227,6 +227,17 @@ Claude: (activates page-building skill → creates menu → builds each page wit
 | `nb_ai_shortcut` | Add floating avatar to page |
 | `nb_ai_button` | Add AI button to table action bar |
 
+### Workflow (7)
+| Tool | Description |
+|------|-------------|
+| `nb_create_workflow` | Create workflow with trigger (collection/schedule/action) |
+| `nb_add_node` | Add node (condition/update/create/query/sql/request/loop/end) |
+| `nb_enable_workflow` | Enable or disable a workflow |
+| `nb_list_workflows` | List workflows with optional filtering |
+| `nb_get_workflow` | Get workflow details including nodes |
+| `nb_delete_workflow` | Delete a workflow |
+| `nb_delete_workflows_by_prefix` | Batch delete by title prefix |
+
 ### Outline/Event (2)
 | Tool | Description |
 |------|-------------|
@@ -239,6 +250,7 @@ Claude: (activates page-building skill → creates menu → builds each page wit
 |-------|-------------|
 | `nocobase-data-modeling` | 7-step workflow: SQL → register → sync → upgrade → relations → data |
 | `nocobase-page-building` | Page construction: menu → layout → table → filter → KPI → form → popup → JS |
+| `nocobase-workflow` | Workflow automation: triggers → conditions → data operations → SQL → scheduling |
 | `nocobase-ai-employee` | AI employee CRUD + page integration (shortcuts + buttons) |
 
 ## Example: Asset Management Demo

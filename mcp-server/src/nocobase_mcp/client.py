@@ -1222,6 +1222,112 @@ class NB:
                              "auto": False,
                          })
 
+    # ── Workflow API ─────────────────────────────────────────────
+
+    def workflow_list(self, enabled=None, prefix=None):
+        """List workflows (current versions only).
+
+        Args:
+            enabled: True/False to filter, None for all
+            prefix: filter by title prefix (e.g. "AM-")
+        Returns: list of workflow dicts
+        """
+        params = {"pageSize": 200}
+        if enabled is not None:
+            params["filter[enabled]"] = str(enabled).lower()
+        r = self.s.get(f"{self.base}/api/workflows:list", params=params)
+        if not r.ok:
+            return []
+        wfs = [w for w in r.json().get("data", []) if w.get("current", True)]
+        if prefix:
+            wfs = [w for w in wfs if w.get("title", "").startswith(prefix)]
+        return wfs
+
+    def workflow_get(self, wf_id):
+        """Get workflow details + its nodes.
+
+        Returns: (workflow_dict, nodes_list)
+        """
+        r = self.s.get(f"{self.base}/api/workflows:get?filterByTk={wf_id}")
+        if not r.ok:
+            return None, []
+        wf = r.json().get("data")
+        r2 = self.s.get(f"{self.base}/api/workflows/{wf_id}/nodes:list")
+        nodes = r2.json().get("data", []) if r2.ok else []
+        return wf, nodes
+
+    def workflow_create(self, title, trigger_type, trigger_config, sync=False):
+        """Create a workflow.
+
+        Args:
+            title: workflow title
+            trigger_type: 'collection', 'schedule', or 'action'
+            trigger_config: trigger configuration dict
+            sync: synchronous execution (default False)
+        Returns: workflow dict or None
+        """
+        data = {
+            "title": title,
+            "type": trigger_type,
+            "config": trigger_config,
+            "enabled": False,
+            "sync": sync,
+        }
+        r = self.s.post(f"{self.base}/api/workflows:create", json=data)
+        if not r.ok:
+            return None
+        return r.json().get("data")
+
+    def workflow_update(self, wf_id, values):
+        """Update workflow fields (enabled, title, config, etc.)."""
+        r = self.s.post(f"{self.base}/api/workflows:update?filterByTk={wf_id}",
+                        json=values)
+        return r.ok
+
+    def workflow_delete(self, wf_id):
+        """Delete a workflow (auto-disables first)."""
+        self.s.post(f"{self.base}/api/workflows:update?filterByTk={wf_id}",
+                    json={"enabled": False})
+        r = self.s.post(f"{self.base}/api/workflows:destroy?filterByTk={wf_id}")
+        return r.ok
+
+    def workflow_node_create(self, wf_id, node_type, title, config,
+                              upstream_id=None, branch_index=None):
+        """Create a workflow node.
+
+        Args:
+            wf_id: workflow ID
+            node_type: 'condition', 'update', 'create', 'query', 'sql',
+                       'request', 'loop', 'end'
+            title: node title
+            config: node configuration dict
+            upstream_id: ID of upstream node (for linking)
+            branch_index: branch index (1=true, 0=false for conditions;
+                          1=loop body for loops; None=main line)
+        Returns: node dict or None
+        """
+        data = {"type": node_type, "title": title, "config": config}
+        if upstream_id is not None:
+            data["upstreamId"] = upstream_id
+        if branch_index is not None:
+            data["branchIndex"] = branch_index
+        r = self.s.post(f"{self.base}/api/workflows/{wf_id}/nodes:create",
+                        json=data)
+        if not r.ok:
+            return None
+        return r.json().get("data")
+
+    def workflow_node_update(self, node_id, values):
+        """Update a workflow node."""
+        r = self.s.post(f"{self.base}/api/flow_nodes:update?filterByTk={node_id}",
+                        json=values)
+        return r.ok
+
+    def workflow_node_delete(self, node_id):
+        """Delete a workflow node."""
+        r = self.s.post(f"{self.base}/api/flow_nodes:destroy?filterByTk={node_id}")
+        return r.ok
+
     # ── Summary ────────────────────────────────────────────────
 
     def summary(self):

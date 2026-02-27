@@ -3,7 +3,7 @@
 ## What This Repo Does
 
 This repo lets AI agents operate NocoBase through MCP tools + Skills knowledge.
-- **MCP Server** (mcp-server/) — 41 atomic API tools
+- **MCP Server** (mcp-server/) — 48 atomic API tools
 - **Skills** (skills/) — workflow guides for data modeling, page building, AI employees
 - **Examples** (examples/) — complete demo systems with scripts
 
@@ -43,6 +43,7 @@ Configure `.mcp.json` in your project (see `.mcp.json.example`).
 Skills are knowledge files that guide AI to use MCP tools correctly:
 - `skills/nocobase-data-modeling/skill.md` — SQL → register → sync → upgrade → relations
 - `skills/nocobase-page-building/skill.md` — menu → layout → blocks → forms → popups
+- `skills/nocobase-workflow/skill.md` — Workflow triggers, conditions, data ops, scheduling
 - `skills/nocobase-ai-employee/skill.md` — AI employee CRUD + page integration
 
 ## Running the Asset Management Demo
