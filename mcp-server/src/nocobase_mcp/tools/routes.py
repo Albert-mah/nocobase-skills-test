@@ -9,7 +9,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from ..client import get_nb_client, NB
-from ..utils import uid
+from ..utils import uid, safe_json
 
 
 def register_tools(mcp: FastMCP):
@@ -64,7 +64,7 @@ def register_tools(mcp: FastMCP):
             nb_create_page("Settings", 123, tabs='["Categories", "Types"]')
         """
         nb = get_nb_client()
-        tab_list = json.loads(tabs) if tabs else None
+        tab_list = safe_json(tabs) if tabs else None
         rid, pu, tu = nb.route(title, parent_id, icon=icon, tabs=tab_list)
         return json.dumps({"route_id": rid, "page_uid": pu, "tab_uids": tu})
 
@@ -92,7 +92,7 @@ def register_tools(mcp: FastMCP):
             nb_create_menu("Asset Mgmt", 1, '[["Ledger","databaseoutlined"],["Purchase","shoppingcartoutlined"]]')
         """
         nb = get_nb_client()
-        page_list = json.loads(pages)
+        page_list = safe_json(pages)
         pid = parent_id if parent_id else None
         tabs = nb.menu(group_title, pid, page_list, group_icon=group_icon)
         return json.dumps(tabs)

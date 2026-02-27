@@ -10,6 +10,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from ..client import get_nb_client
+from ..utils import safe_json
 
 
 def register_tools(mcp: FastMCP):
@@ -55,8 +56,8 @@ def register_tools(mcp: FastMCP):
                 '[{"name":"dataSource-dataSourceQuery","autoCall":true}]')
         """
         nb = get_nb_client()
-        skills = json.loads(skills_json)
-        model_settings = json.loads(model_settings_json) if model_settings_json else None
+        skills = safe_json(skills_json)
+        model_settings = safe_json(model_settings_json) if model_settings_json else None
         result = nb.ai_employee_create(
             username, nickname, position, avatar, bio,
             about, greeting, skills, model_settings,
@@ -116,7 +117,7 @@ def register_tools(mcp: FastMCP):
                 '{"about":"Updated system prompt...","enabled":true}')
         """
         nb = get_nb_client()
-        values = json.loads(values_json)
+        values = safe_json(values_json)
         ok = nb.ai_employee_update(username, values)
         return "Updated successfully" if ok else "Update failed"
 
@@ -160,7 +161,7 @@ def register_tools(mcp: FastMCP):
                 '[{"username":"am-asset-keeper","tasks":[{"title":"查询","message":{"user":"帮我查资产"},"autoSend":false}]}]')
         """
         nb = get_nb_client()
-        employees = json.loads(employees_json)
+        employees = safe_json(employees_json)
         container_uid = nb.ai_shortcut_list(page_schema_uid, employees)
         return json.dumps({"container_uid": container_uid})
 
@@ -189,6 +190,6 @@ def register_tools(mcp: FastMCP):
                 '[{"title":"查询资产","message":{"user":"帮我查询当前资产情况"},"autoSend":false}]')
         """
         nb = get_nb_client()
-        tasks = json.loads(tasks_json) if tasks_json else None
+        tasks = safe_json(tasks_json) if tasks_json else None
         button_uid = nb.ai_button(block_uid, username, tasks)
         return json.dumps({"button_uid": button_uid})

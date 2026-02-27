@@ -12,6 +12,7 @@ from ..client import (
     NocoBaseClient, APIError, get_stdlib_client,
     INTERFACE_TEMPLATES, SYSTEM_FIELD_MAP,
 )
+from ..utils import safe_json
 
 
 def _build_field_update(field_name, target_interface, extra_config=None, existing_title=None):
@@ -105,8 +106,8 @@ def register_tools(mcp: FastMCP):
         extra_config = {}
         if enum:
             try:
-                extra_config["enum"] = json.loads(enum)
-            except json.JSONDecodeError:
+                extra_config["enum"] = safe_json(enum)
+            except (json.JSONDecodeError, TypeError):
                 return "ERROR: Invalid enum JSON. Expected format: [{\"value\":\"v\",\"label\":\"L\"}]"
         if title:
             extra_config["title"] = title

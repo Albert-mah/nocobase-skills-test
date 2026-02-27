@@ -10,7 +10,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from ..client import get_nb_client, NB
-from ..utils import uid
+from ..utils import uid, safe_json
 
 
 def register_tools(mcp: FastMCP):
@@ -64,7 +64,7 @@ def register_tools(mcp: FastMCP):
             nb_table_block("grid123", "nb_pm_projects", '["name","status","createdAt"]', title="Projects")
         """
         nb = get_nb_client()
-        field_list = json.loads(fields)
+        field_list = safe_json(fields)
         tbl, addnew, actcol = nb.table_block(parent, collection, field_list,
                                               first_click=first_click, title=title)
         return json.dumps({
@@ -105,7 +105,7 @@ def register_tools(mcp: FastMCP):
             nb_addnew_form("addnew123", "nb_pm_projects", "--- Info\\nname* | code\\nstatus\\n--- Notes\\ndescription")
         """
         nb = get_nb_client()
-        field_props = json.loads(props) if props else None
+        field_props = safe_json(props) if props else None
         cp = nb.addnew_form(addnew_uid, collection, fields_dsl, props=field_props)
         return json.dumps({"childpage_uid": cp})
 
@@ -131,7 +131,7 @@ def register_tools(mcp: FastMCP):
             nb_edit_action("actcol123", "nb_pm_projects", "name* | code\\nstatus\\ndescription")
         """
         nb = get_nb_client()
-        field_props = json.loads(props) if props else None
+        field_props = safe_json(props) if props else None
         ea = nb.edit_action(actcol_uid, collection, fields_dsl, props=field_props)
         return json.dumps({"edit_action_uid": ea})
 
@@ -171,7 +171,7 @@ def register_tools(mcp: FastMCP):
                 '[{"title":"Info","fields":"name | code\\nstatus"},{"title":"Tasks","assoc":"tasks","coll":"nb_pm_tasks","fields":["name","status"]}]')
         """
         nb = get_nb_client()
-        tabs = json.loads(tabs_config)
+        tabs = safe_json(tabs_config)
         cp = nb.detail_popup(parent_uid, collection, tabs, mode=mode, size=size)
         return json.dumps({"childpage_uid": cp})
 
@@ -204,7 +204,7 @@ def register_tools(mcp: FastMCP):
             nb_filter_form("grid123", "nb_pm_projects", '["name","code"]', target_uid="tbl123")
         """
         nb = get_nb_client()
-        fields = json.loads(search_fields)
+        fields = safe_json(search_fields)
         field = fields[0] if fields else "name"
         fb, fi = nb.filter_form(parent, collection, field,
                                 target_uid=target_uid, label=label,
@@ -237,7 +237,7 @@ def register_tools(mcp: FastMCP):
             nb_kpi_block("grid123", "Active", "nb_pm_projects", filter_='{"status":"active"}', color="#52c41a")
         """
         nb = get_nb_client()
-        filter_dict = json.loads(filter_) if filter_ else None
+        filter_dict = safe_json(filter_) if filter_ else None
         kpi_uid = nb.kpi(parent, title, collection, filter_=filter_dict, color=color)
         return json.dumps({"kpi_uid": kpi_uid})
 
@@ -328,7 +328,7 @@ def register_tools(mcp: FastMCP):
             nb_set_layout("grid123", '[[["kpi1",6],["kpi2",6]],[["filter1"]],[["table1"]]]')
         """
         nb = get_nb_client()
-        rows = json.loads(rows_spec)
+        rows = safe_json(rows_spec)
 
         # Convert JSON rows_spec to the format expected by set_layout:
         # Each row is either (uid,) for full-width or [(uid, size), ...] for multi-col
@@ -417,7 +417,7 @@ def register_tools(mcp: FastMCP):
                 kind="item")
         """
         nb = get_nb_client()
-        info = json.loads(ctx_info)
+        info = safe_json(ctx_info)
         outline_uid = nb.outline(parent, title, info, kind=kind)
         return json.dumps({"outline_uid": outline_uid})
 
@@ -524,17 +524,17 @@ def register_tools(mcp: FastMCP):
         # Step 2: KPIs
         kpi_uids = []
         if kpis_json:
-            kpis = json.loads(kpis_json)
+            kpis = safe_json(kpis_json)
             for kpi in kpis:
                 ktitle = kpi.get("title", "Count")
-                kfilter = json.dumps(kpi["filter"]) if "filter" in kpi else None
+                kfilter = kpi.get("filter")  # pass dict directly, kpi() handles serialization
                 kcolor = kpi.get("color")
-                ku = nb.kpi_block(grid, ktitle, collection, filter_=kfilter, color=kcolor)
+                ku = nb.kpi(grid, ktitle, collection, filter_=kfilter, color=kcolor)
                 kpi_uids.append(ku)
                 element_count += 1
 
         # Step 3: Table
-        cols = json.loads(table_fields)
+        cols = safe_json(table_fields)
         tbl_uid, addnew_uid, actcol_uid = nb.table_block(
             grid, collection, cols, first_click=True, title=table_title
         )
@@ -544,8 +544,11 @@ def register_tools(mcp: FastMCP):
         # Step 4: Filter
         filter_uid = None
         if filter_fields:
-            ff = json.loads(filter_fields)
-            filter_uid = nb.filter_form(grid, collection, ff, target_uid=tbl_uid)
+            ff = safe_json(filter_fields)
+            first_field = ff[0] if ff else "name"
+            fb, _fi = nb.filter_form(grid, collection, first_field,
+                                     target_uid=tbl_uid, search_fields=ff)
+            filter_uid = fb
             element_count += 1
 
         # Step 5: AddNew form
@@ -569,7 +572,7 @@ def register_tools(mcp: FastMCP):
 
         # Step 8: Detail popup
         if detail_json and detail_json != "none":
-            tabs = json.loads(detail_json)
+            tabs = safe_json(detail_json)
             click_uid = nb.find_click_field(tbl_uid, cols[0])
             if click_uid:
                 nb.detail_popup(click_uid, collection, tabs, mode="drawer", size="large")

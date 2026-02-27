@@ -13,6 +13,7 @@ from ..client import (
     NocoBaseClient, APIError, get_stdlib_client,
     SYSTEM_FIELD_PAYLOADS, SYSTEM_FIELD_MAP,
 )
+from ..utils import safe_json
 
 
 def register_tools(mcp: FastMCP):
@@ -276,8 +277,8 @@ def register_tools(mcp: FastMCP):
         # Step 3: Batch upgrade field interfaces
         if fields_json:
             try:
-                field_configs = json.loads(fields_json)
-            except json.JSONDecodeError:
+                field_configs = safe_json(fields_json)
+            except (json.JSONDecodeError, TypeError):
                 results.append("[upgrade] ERROR: invalid fields_json")
                 field_configs = {}
 
@@ -321,8 +322,8 @@ def register_tools(mcp: FastMCP):
         # Step 4: Batch create relations
         if relations_json:
             try:
-                relations = json.loads(relations_json)
-            except json.JSONDecodeError:
+                relations = safe_json(relations_json)
+            except (json.JSONDecodeError, TypeError):
                 results.append("[relations] ERROR: invalid relations_json")
                 relations = []
 

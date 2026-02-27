@@ -10,6 +10,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from ..client import get_nb_client
+from ..utils import safe_json
 
 
 def register_tools(mcp: FastMCP):
@@ -54,7 +55,7 @@ def register_tools(mcp: FastMCP):
                 '{"mode": 1, "collection": "orders", "appends": [], "condition": {"$and": []}}')
         """
         nb = get_nb_client()
-        config = json.loads(trigger_config_json)
+        config = safe_json(trigger_config_json)
         wf = nb.workflow_create(title, trigger_type, config, sync=sync)
         if not wf:
             return json.dumps({"error": f"Failed to create workflow '{title}'"})
@@ -149,7 +150,7 @@ def register_tools(mcp: FastMCP):
             nb_add_node(wf_id, "update", "Set Inactive", '...', upstream_id=node_id, branch_index=0)
         """
         nb = get_nb_client()
-        config = json.loads(config_json)
+        config = safe_json(config_json)
         node = nb.workflow_node_create(
             workflow_id, node_type, title, config,
             upstream_id=upstream_id, branch_index=branch_index,

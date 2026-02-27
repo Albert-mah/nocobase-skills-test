@@ -9,7 +9,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from ..client import get_nb_client, NB, DISPLAY_MAP, EDIT_MAP
-from ..utils import uid, deep_merge
+from ..utils import uid, deep_merge, safe_json
 
 
 class PageTool:
@@ -258,7 +258,7 @@ def register_tools(mcp: FastMCP):
             nb_patch_field("abc123", '{"description":"Enter full name","required":true}')
         """
         nb = get_nb_client()
-        kwargs = json.loads(props)
+        kwargs = safe_json(props)
 
         patch = {}
         eis = {}
@@ -302,7 +302,7 @@ def register_tools(mcp: FastMCP):
             nb_patch_column("abc123", '{"width":120,"title":"New Title"}')
         """
         nb = get_nb_client()
-        kwargs = json.loads(props)
+        kwargs = safe_json(props)
 
         patch = {}
         tcs = {}
