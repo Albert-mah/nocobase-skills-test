@@ -14,6 +14,7 @@ triggers:
   - outline
   - 大纲
 tools:
+  - nb_crud_page
   - nb_create_group
   - nb_create_page
   - nb_create_menu
@@ -70,7 +71,27 @@ Tab (RouteModel)
 ### CRITICAL: FlowModel API is Full Replace
 The `flowModels:update` API does a **full replace**, not incremental merge. The client always does GET → deep_merge → PUT internally. Never send partial data.
 
-## Workflow
+## Recommended: Fast Path (nb_crud_page)
+
+For standard CRUD pages, use `nb_crud_page` — it creates layout + KPIs + filter + table + forms + popup in ONE call:
+
+```
+nb_crud_page("tab_uid", "nb_crm_customers",
+    '["name","code","status","industry","phone","createdAt"]',
+    '--- 基本信息\nname* | code\ncustomer_type | industry\nstatus | level\n--- 联系方式\nphone | email\naddress',
+    filter_fields='["name","status","industry"]',
+    kpis_json='[{"title":"客户总数"},{"title":"已签约","filter":{"status":"已签约"},"color":"#52c41a"},{"title":"跟进中","filter":{"status":"跟进中"},"color":"#1890ff"}]',
+    detail_json='[{"title":"客户详情","fields":"name | code\nstatus | level\nindustry | scale\nphone | email\naddress\nremark"},{"title":"联系人","assoc":"contacts","coll":"nb_crm_contacts","fields":["name","position","mobile","email"]}]')
+```
+
+This replaces 8+ individual tool calls with ONE call. Use this for every standard page.
+
+**When to use individual tools instead:**
+- Non-standard layouts (multiple tables on one page)
+- JS blocks, event flows, outlines
+- Page modifications after initial build
+
+## Manual Path (Individual Tools)
 
 ### Phase 1: Menu Structure
 

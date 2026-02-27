@@ -12,6 +12,7 @@ triggers:
   - create table
 tools:
   - nb_execute_sql
+  - nb_setup_collection
   - nb_register_collection
   - nb_sync_fields
   - nb_upgrade_field
@@ -29,6 +30,31 @@ You are guiding the user to create data models in NocoBase. Follow this exact wo
 NocoBase uses a **hybrid approach** — SQL for bulk column creation (fast), API for metadata management (interface/UI config).
 
 **Why not pure API?** Creating fields one-by-one via API is slow and has quirks. SQL `CREATE TABLE` creates all columns in one shot, then `syncFields` imports them into NocoBase.
+
+## Recommended: Fast Path (2 Steps)
+
+For maximum efficiency, use the batch tools:
+
+### Step 1: Create ALL tables in one SQL call
+```
+nb_execute_sql("CREATE TABLE IF NOT EXISTS nb_crm_customers (...); CREATE TABLE IF NOT EXISTS nb_crm_contacts (...); ...")
+```
+Put all tables in a single SQL statement. This is much faster than creating them one by one.
+
+### Step 2: Setup each collection with nb_setup_collection
+```
+nb_setup_collection("nb_crm_customers", "客户",
+    '{"status":{"interface":"select","enum":[{"value":"潜在","label":"潜在","color":"default"},{"value":"已签约","label":"已签约","color":"green"}]},"phone":{"interface":"phone"},"email":{"interface":"email"},"description":{"interface":"textarea"}}',
+    '[{"field":"contacts","type":"o2m","target":"nb_crm_contacts","foreign_key":"customer_id"},{"field":"opportunities","type":"o2m","target":"nb_crm_opportunities","foreign_key":"customer_id"}]')
+```
+
+This single call does: register → create system fields → sync → upgrade ALL field interfaces → create ALL relations. One call per table instead of 10+.
+
+**IMPORTANT:** Process tables in dependency order — parent tables first (those referenced by FK), then child tables.
+
+## Manual Path (7 Steps Per Collection)
+
+Use individual tools when you need fine-grained control:
 
 ## Workflow (7 Steps Per Collection)
 

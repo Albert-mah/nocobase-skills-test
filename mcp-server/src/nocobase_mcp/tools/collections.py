@@ -35,7 +35,37 @@ def register_tools(mcp: FastMCP):
         Example:
             nb_execute_sql("CREATE TABLE IF NOT EXISTS nb_pm_projects (id BIGSERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL)")
         """
-        db_url = db_url or "postgresql://nocobase:nocobase@localhost:5435/nocobase"
+        import os
+        db_url = db_url or os.environ.get("NB_DB_URL", "postgresql://nocobase:nocobase@localhost:5435/nocobase")
+        # Try psycopg2 first (no external binary needed)
+        try:
+            import psycopg2
+            conn = psycopg2.connect(db_url)
+            conn.autocommit = True
+            cur = conn.cursor()
+            cur.execute(sql)
+            # Try to fetch results if it was a SELECT
+            try:
+                rows = cur.fetchall()
+                if rows:
+                    cols = [d[0] for d in cur.description] if cur.description else []
+                    lines = ["\t".join(cols)] if cols else []
+                    for row in rows:
+                        lines.append("\t".join(str(v) for v in row))
+                    result = "\n".join(lines)
+                else:
+                    result = "OK (0 rows)"
+            except psycopg2.ProgrammingError:
+                result = f"OK ({cur.rowcount} rows affected)" if cur.rowcount >= 0 else "OK"
+            cur.close()
+            conn.close()
+            return result
+        except ImportError:
+            pass  # Fall through to psql
+        except Exception as e:
+            return f"ERROR: {e}"
+
+        # Fallback: psql CLI
         try:
             result = subprocess.run(
                 ["psql", db_url, "-c", sql],
@@ -46,7 +76,7 @@ def register_tools(mcp: FastMCP):
                 return f"ERROR: {result.stderr.strip()}\n{output}"
             return output or "OK (no output)"
         except FileNotFoundError:
-            return "ERROR: psql not found. Install postgresql-client."
+            return "ERROR: Neither psycopg2 nor psql available. Install: pip install psycopg2-binary"
         except subprocess.TimeoutExpired:
             return "ERROR: SQL execution timed out (30s limit)"
 
@@ -146,6 +176,200 @@ def register_tools(mcp: FastMCP):
                 pass
 
         return "\n".join(results)
+
+    @mcp.tool()
+    def nb_setup_collection(
+        name: str,
+        title: str,
+        fields_json: Optional[str] = None,
+        relations_json: Optional[str] = None,
+        tree: Optional[str] = None,
+    ) -> str:
+        """Register a collection, sync fields, upgrade interfaces, and create relations — all in one call.
+
+        Combines nb_register_collection + nb_sync_fields + nb_upgrade_field (batch) + nb_create_relation (batch).
+        Use this instead of calling those tools individually for each table.
+
+        Args:
+            name: Collection name (must match DB table name)
+            title: Display title in NocoBase UI
+            fields_json: Optional JSON object mapping field names to upgrade configs.
+                Keys are field names, values are objects with:
+                  - "interface": target interface (required)
+                  - "enum": array of enum options for select/multipleSelect
+                  - "title": display title override
+                  - "precision": decimal precision for number fields
+
+                Example:
+                    {"status": {"interface": "select", "enum": [{"value":"active","label":"Active","color":"green"}]},
+                     "start_date": {"interface": "date"},
+                     "budget": {"interface": "number", "precision": 2},
+                     "description": {"interface": "textarea"},
+                     "email": {"interface": "email"}}
+
+                Fields not listed here keep their default interface (input).
+
+            relations_json: Optional JSON array of relation definitions.
+                Each item: {"field": "name", "type": "m2o|o2m|m2m", "target": "collection", "foreign_key": "fk_col", "label": "display_field"}
+
+                Example:
+                    [{"field": "project", "type": "m2o", "target": "nb_pm_projects", "foreign_key": "project_id", "label": "name"},
+                     {"field": "tasks", "type": "o2m", "target": "nb_pm_tasks", "foreign_key": "project_id"}]
+
+            tree: Tree type for hierarchical collections ("adjacency-list")
+
+        Returns:
+            Summary of all operations performed.
+
+        Example:
+            nb_setup_collection("nb_crm_customers", "客户",
+                '{"status":{"interface":"select","enum":[{"value":"active","label":"Active","color":"green"}]},"phone":{"interface":"phone"}}',
+                '[{"field":"contacts","type":"o2m","target":"nb_crm_contacts","foreign_key":"customer_id"}]')
+        """
+        client = get_stdlib_client()
+        results = []
+
+        # Step 1: Register collection
+        payload = {"name": name, "title": title, "autoCreate": False, "timestamps": False}
+        if tree:
+            payload["tree"] = tree
+        try:
+            client.post("/api/collections:create", payload)
+            results.append(f"[register] OK")
+        except APIError as e:
+            if "duplicate" in e.body.lower() or e.code == 400:
+                results.append(f"[register] already exists")
+            else:
+                results.append(f"[register] ERROR: {e}")
+                return "\n".join(results)
+
+        # Step 2: Create system fields + sync
+        try:
+            resp = client.get(f"/api/collections/{name}/fields:list?paginate=false")
+            existing_names = {f["name"] for f in resp.get("data", [])}
+        except APIError:
+            existing_names = set()
+
+        sys_created = 0
+        for spay in SYSTEM_FIELD_PAYLOADS:
+            if spay["name"] not in existing_names and spay["interface"] not in existing_names:
+                try:
+                    client.post(f"/api/collections/{name}/fields:create", spay)
+                    sys_created += 1
+                except APIError:
+                    pass
+
+        try:
+            client.post("/api/mainDataSource:syncFields", expect_empty=True)
+        except APIError:
+            pass
+
+        # Re-fetch fields after sync
+        try:
+            resp = client.get(f"/api/collections/{name}/fields:list?paginate=false")
+            fields = resp.get("data", [])
+            results.append(f"[sync] {len(fields)} fields ({sys_created} system fields created)")
+        except APIError as e:
+            results.append(f"[sync] ERROR: {e}")
+            fields = []
+
+        # Step 3: Batch upgrade field interfaces
+        if fields_json:
+            try:
+                field_configs = json.loads(fields_json)
+            except json.JSONDecodeError:
+                results.append("[upgrade] ERROR: invalid fields_json")
+                field_configs = {}
+
+            existing_map = {f["name"]: f for f in fields}
+            upgraded, skipped, failed = 0, 0, 0
+
+            for fname, fconfig in field_configs.items():
+                ef = existing_map.get(fname)
+                if not ef:
+                    results.append(f"[upgrade] {fname}: not found (skipped)")
+                    skipped += 1
+                    continue
+
+                target_iface = fconfig.get("interface", "input")
+                if ef.get("interface") == target_iface:
+                    skipped += 1
+                    continue
+
+                extra = {}
+                if "enum" in fconfig:
+                    extra["enum"] = fconfig["enum"]
+                if "title" in fconfig:
+                    extra["title"] = fconfig["title"]
+                if "precision" in fconfig:
+                    extra["precision"] = fconfig["precision"]
+
+                existing_title = (ef.get("uiSchema") or {}).get("title")
+                upd = _build_field_update(fname, target_iface, extra, existing_title)
+                if not upd:
+                    skipped += 1
+                    continue
+
+                try:
+                    client.put(f"/api/fields:update?filterByTk={ef['key']}", upd)
+                    upgraded += 1
+                except APIError:
+                    failed += 1
+
+            results.append(f"[upgrade] {upgraded} upgraded, {skipped} skipped, {failed} failed")
+
+        # Step 4: Batch create relations
+        if relations_json:
+            try:
+                relations = json.loads(relations_json)
+            except json.JSONDecodeError:
+                results.append("[relations] ERROR: invalid relations_json")
+                relations = []
+
+            # Re-fetch fields for relation check
+            try:
+                resp = client.get(f"/api/collections/{name}/fields:list?paginate=false")
+                existing_names = {f["name"] for f in resp.get("data", [])}
+            except APIError:
+                existing_names = set()
+
+            rel_ok, rel_skip = 0, 0
+            type_map = {"m2o": "belongsTo", "o2m": "hasMany", "m2m": "belongsToMany", "o2o": "hasOne"}
+
+            for rel in relations:
+                rfield = rel["field"]
+                if rfield in existing_names:
+                    rel_skip += 1
+                    continue
+
+                nb_type = type_map.get(rel["type"], rel["type"])
+                rlabel = rel.get("label", "id")
+                rtitle = rel.get("title", rfield.replace("_", " ").title())
+
+                rpayload = {
+                    "name": rfield, "type": nb_type, "interface": rel["type"],
+                    "target": rel["target"], "foreignKey": rel["foreign_key"],
+                    "uiSchema": {
+                        "x-component": "AssociationField",
+                        "x-component-props": {"fieldNames": {"label": rlabel, "value": "id"}},
+                        "title": rtitle,
+                    },
+                }
+                if nb_type == "belongsToMany":
+                    if "other_key" in rel:
+                        rpayload["otherKey"] = rel["other_key"]
+                    if "through" in rel:
+                        rpayload["through"] = rel["through"]
+
+                try:
+                    client.post(f"/api/collections/{name}/fields:create", rpayload)
+                    rel_ok += 1
+                except APIError:
+                    rel_skip += 1
+
+            results.append(f"[relations] {rel_ok} created, {rel_skip} skipped")
+
+        return f"{name}: " + " | ".join(results)
 
     @mcp.tool()
     def nb_list_collections(filter: Optional[str] = None) -> str:

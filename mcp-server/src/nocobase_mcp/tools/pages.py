@@ -453,3 +453,128 @@ def register_tools(mcp: FastMCP):
         if flow_key:
             return json.dumps({"flow_key": flow_key})
         return "Failed to add event flow"
+
+    @mcp.tool()
+    def nb_crud_page(
+        tab_uid: str,
+        collection: str,
+        table_fields: str,
+        form_fields: str,
+        filter_fields: Optional[str] = None,
+        kpis_json: Optional[str] = None,
+        detail_json: Optional[str] = None,
+        table_title: Optional[str] = None,
+    ) -> str:
+        """Build a complete CRUD page in one call — layout + KPIs + filter + table + forms + popup.
+
+        This is a high-level tool that combines nb_page_layout, nb_kpi_block,
+        nb_filter_form, nb_table_block, nb_addnew_form, nb_edit_action,
+        nb_set_layout, and nb_detail_popup into a single operation.
+
+        Args:
+            tab_uid: Tab UID from nb_create_page or nb_create_menu
+            collection: Collection name for the main table
+            table_fields: JSON array of field names for table columns.
+                Example: '["name","code","status","createdAt"]'
+                The first field will be clickable (opens detail popup if configured).
+            form_fields: Fields DSL string for AddNew and Edit forms.
+                Syntax:
+                  - "name" — single field, full width
+                  - "name*" — required field
+                  - "name | code" — two fields side by side
+                  - "name:16 | code:8" — explicit column widths (total=24)
+                  - "--- Section Title" — divider with label
+                  - "---" — plain divider
+                Example: "--- Basic Info\\nname* | code\\nstatus | priority\\n--- Details\\ndescription"
+            filter_fields: Optional JSON array of field names for the filter/search bar.
+                Example: '["name","status","category"]'
+                If omitted, no filter bar is created.
+            kpis_json: Optional JSON array of KPI card definitions.
+                Each item: {"title": "Label", "filter": {"field": "value"}, "color": "#hex"}
+                The "filter" and "color" keys are optional.
+                Example: '[{"title":"Total"},{"title":"Active","filter":{"status":"active"},"color":"#52c41a"}]'
+            detail_json: Optional JSON for detail popup (drawer/dialog on row click).
+                Same format as nb_detail_popup's tabs parameter:
+                  [{"title":"Tab Name", "fields":"field DSL or blocks array"},
+                   {"title":"Sub Items", "assoc":"items", "coll":"child_collection", "fields":["f1","f2"]}]
+                Example: '[{"title":"Details","fields":"name | code\\nstatus"},{"title":"Tasks","assoc":"tasks","coll":"nb_pm_tasks","fields":["name","status"]}]'
+                Set to "none" or omit to skip detail popup.
+            table_title: Optional title text displayed above the table card.
+
+        Returns:
+            JSON with grid_uid, table_uid, and counts of created elements.
+
+        Example:
+            nb_crud_page("tab123", "nb_crm_customers",
+                '["name","code","status","industry","phone","createdAt"]',
+                '--- 基本信息\\nname* | code\\ncustomer_type | industry\\nstatus | level\\n--- 联系方式\\nphone | email\\naddress',
+                filter_fields='["name","status","industry"]',
+                kpis_json='[{"title":"客户总数"},{"title":"已签约","filter":{"status":"已签约"},"color":"#52c41a"}]',
+                detail_json='[{"title":"客户详情","fields":"name | code\\nstatus | level\\nindustry | scale"}]')
+        """
+        nb = get_nb_client()
+        result = {}
+        element_count = 0
+
+        # Step 1: Layout
+        grid = nb.page_layout(tab_uid)
+        result["grid_uid"] = grid
+        element_count += 1
+
+        # Step 2: KPIs
+        kpi_uids = []
+        if kpis_json:
+            kpis = json.loads(kpis_json)
+            for kpi in kpis:
+                ktitle = kpi.get("title", "Count")
+                kfilter = json.dumps(kpi["filter"]) if "filter" in kpi else None
+                kcolor = kpi.get("color")
+                ku = nb.kpi_block(grid, ktitle, collection, filter_=kfilter, color=kcolor)
+                kpi_uids.append(ku)
+                element_count += 1
+
+        # Step 3: Table
+        cols = json.loads(table_fields)
+        tbl_uid, addnew_uid, actcol_uid = nb.table_block(
+            grid, collection, cols, first_click=True, title=table_title
+        )
+        result["table_uid"] = tbl_uid
+        element_count += 1
+
+        # Step 4: Filter
+        filter_uid = None
+        if filter_fields:
+            ff = json.loads(filter_fields)
+            filter_uid = nb.filter_form(grid, collection, ff, target_uid=tbl_uid)
+            element_count += 1
+
+        # Step 5: AddNew form
+        nb.addnew_form(addnew_uid, collection, form_fields)
+        element_count += 1
+
+        # Step 6: Edit form
+        nb.edit_action(actcol_uid, collection, form_fields)
+        element_count += 1
+
+        # Step 7: Layout arrangement
+        rows = []
+        if kpi_uids:
+            span = 24 // len(kpi_uids) if kpi_uids else 24
+            rows.append([[ku, span] for ku in kpi_uids])
+        if filter_uid:
+            rows.append([[filter_uid]])
+        rows.append([[tbl_uid]])
+        nb.set_layout(grid, rows)
+        element_count += 1
+
+        # Step 8: Detail popup
+        if detail_json and detail_json != "none":
+            tabs = json.loads(detail_json)
+            click_uid = nb.find_click_field(tbl_uid, cols[0])
+            if click_uid:
+                nb.detail_popup(click_uid, collection, tabs, mode="drawer", size="large")
+                element_count += 1
+                result["detail_popup"] = True
+
+        result["elements_created"] = element_count
+        return json.dumps(result)

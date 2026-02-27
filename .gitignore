@@ -25,3 +25,5 @@ Thumbs.db
 # Project
 *.pyc
 .wrangler/
+PLAN.md
+mcp-server/uv.lock
