@@ -142,23 +142,35 @@ Use the NocoBase MCP tools to build a complete CRM (Customer Relationship Manage
 ### Test Data
 Insert 5-10 records per main table with realistic Chinese business data.
 
-## Execution Order
+## Execution Order (Use Batch Tools for Speed!)
 
-Follow the skills workflow:
-1. **Data Modeling** (nocobase-data-modeling skill): SQL DDL → register → sync → upgrade → relations
-2. **Seed Data**: Insert test records via SQL
-3. **Page Building** (nocobase-page-building skill): menu → pages → layout → blocks → forms → popups
-4. **Workflows** (nocobase-workflow skill): create → add nodes → enable
-5. **AI Employees** (nocobase-ai-employee skill): create employees → add page shortcuts
+### Phase 1: Data Modeling (2 steps only!)
+1. **One SQL call** — create ALL 7 tables in a single `nb_execute_sql()` call
+2. **One `nb_setup_collection()` per table** (7 calls) — each call does register + sync + upgrade ALL fields + create ALL relations in ONE shot. Process parent tables first (customers, products), then child tables.
 
-After each phase, verify the results using the appropriate list/show tools.
+### Phase 2: Seed Data
+- One `nb_execute_sql()` call with all INSERT statements
+
+### Phase 3: Page Building (use nb_crud_page!)
+1. `nb_create_menu()` — create CRM menu group + 6 pages (1 call)
+2. **One `nb_crud_page()` per page** (6 calls) — each call creates layout + KPIs + filter + table + forms + detail popup in ONE shot
+
+### Phase 4: Workflows
+- `nb_create_workflow()` + `nb_add_node()` + `nb_enable_workflow()` for each workflow (4 workflows × 3 calls = 12 calls)
+
+### Phase 5: AI Employees
+- `nb_create_ai_employee()` × 2 + `nb_ai_shortcut()` for page integration
+
+### Total: ~30 MCP tool calls (instead of 150+)
+
+After each phase, verify results using nb_list_collections, nb_show_page, nb_list_workflows.
 PROMPT
 )"
 ```
 
 ## Expected Result
 
-After ~10-15 minutes, Claude Code should produce:
+After ~3-5 minutes, Claude Code should produce:
 - 7 tables with all fields properly typed (select enums with colors)
 - 6 pages with KPIs, tables, filters, forms, detail popups with sub-tables
 - 4 automated workflows
