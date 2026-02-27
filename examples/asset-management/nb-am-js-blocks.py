@@ -405,7 +405,10 @@ def fill_detail_cards(nb):
             print(f"    {'Updated successfully' if ok else 'FAILED to update'}")
             found += 1
         else:
-            print(f"\n  ⚠️  TODO block [{uid}] title='{title}' — no matching code, skipped")
+            # Only warn about AM-related TODO blocks, skip others silently
+            am_keywords = ["资产", "车辆", "采购", "领用", "报修", "报废", "库存", "耗品"]
+            if any(k in title for k in am_keywords):
+                print(f"\n  ⚠️  TODO block [{uid}] title='{title}' — no matching code, skipped")
 
     if found == 0:
         print("\n  No TODO JS blocks found (all cards may already be filled)")

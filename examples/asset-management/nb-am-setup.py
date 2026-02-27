@@ -15,7 +15,7 @@ Environment:
     NB_URL       http://localhost:14000
     NB_USER      admin@nocobase.com
     NB_PASSWORD  admin123
-    NB_DB_URL    postgresql://nocobase:nocobase@localhost:15432/nocobase
+    NB_DB_URL    postgresql://nocobase:nocobase@localhost:5435/nocobase
 """
 
 import argparse
@@ -944,7 +944,7 @@ ALL_COLLECTIONS = {
 # ---------------------------------------------------------------------------
 
 def run_sql(sql_text, db_url, drop=False):
-    """Execute SQL via psql."""
+    """Execute SQL via psycopg2 (falls back to psql if unavailable)."""
     if drop:
         # Generate DROP statements for all nb_am_ tables (reverse order)
         all_tables = []
@@ -954,16 +954,35 @@ def run_sql(sql_text, db_url, drop=False):
         drop_sql = "\n".join(f"DROP TABLE IF EXISTS {t} CASCADE;" for t in all_tables)
         sql_text = drop_sql + "\n\n" + sql_text
 
+    # Try psycopg2 first (no external dependency on psql binary)
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(sql_text)
+        cur.close()
+        conn.close()
+        print(f"  ✅ SQL executed successfully (psycopg2)")
+        return True
+    except ImportError:
+        pass  # Fall through to psql
+    except Exception as e:
+        print(f"  ❌ SQL error (psycopg2): {e}")
+        return False
+
+    # Fallback: psql CLI
     cmd = ["psql", db_url, "-c", sql_text]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             print(f"  ❌ SQL error:\n{result.stderr}")
             return False
-        print(f"  ✅ SQL executed successfully")
+        print(f"  ✅ SQL executed successfully (psql)")
         return True
     except FileNotFoundError:
-        print(f"  ❌ psql not found — run SQL manually or set NB_DB_URL")
+        print(f"  ❌ Neither psycopg2 nor psql available.")
+        print(f"     Install: pip install psycopg2-binary")
         return False
     except subprocess.TimeoutExpired:
         print(f"  ❌ SQL timed out")
@@ -979,7 +998,7 @@ def main():
     parser.add_argument("--url", default=os.environ.get("NB_URL", "http://localhost:14000"))
     parser.add_argument("--user", default=os.environ.get("NB_USER", "admin@nocobase.com"))
     parser.add_argument("--password", default=os.environ.get("NB_PASSWORD", "admin123"))
-    parser.add_argument("--db-url", default=os.environ.get("NB_DB_URL", "postgresql://nocobase:nocobase@localhost:15432/nocobase"))
+    parser.add_argument("--db-url", default=os.environ.get("NB_DB_URL", "postgresql://nocobase:nocobase@localhost:5435/nocobase"))
     parser.add_argument("--module", "-m", choices=["M1", "M2", "M3", "M4"], help="Only process one module")
     parser.add_argument("--dry-run", "-n", action="store_true", help="Preview mode")
     parser.add_argument("--skip-data", action="store_true", help="Skip seed data insertion")
@@ -1027,6 +1046,27 @@ def main():
     except Exception as e:
         print(f"  ❌ Login failed: {e}")
         sys.exit(1)
+
+    # If --drop and data will be inserted, truncate tables first to prevent duplicates
+    if args.drop and not args.skip_data and not args.dry_run:
+        print(f"\n  Truncating data in tables (--drop mode)...")
+        truncate_sql = ""
+        for m in ["M4", "M3", "M2", "M1"]:
+            if m in modules:
+                for coll in reversed(ALL_COLLECTIONS[m]):
+                    truncate_sql += f"TRUNCATE TABLE {coll['name']} CASCADE;\n"
+        if truncate_sql:
+            try:
+                import psycopg2
+                conn = psycopg2.connect(args.db_url)
+                conn.autocommit = True
+                cur = conn.cursor()
+                cur.execute(truncate_sql)
+                cur.close()
+                conn.close()
+                print(f"  ✅ Tables truncated")
+            except Exception as e:
+                print(f"  ⚠️  Truncate failed (data may duplicate): {e}")
 
     total = 0
     for m in modules:
