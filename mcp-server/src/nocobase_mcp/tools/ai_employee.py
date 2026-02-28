@@ -26,7 +26,7 @@ def register_tools(mcp: FastMCP):
         about: str,
         greeting: str,
         skills_json: str,
-        model_settings_json: Optional[str] = None,
+        model_settings_json: Optional[dict] = None,
     ) -> str:
         """Create an AI employee (chatbot assistant).
 
@@ -169,7 +169,7 @@ def register_tools(mcp: FastMCP):
     def nb_ai_button(
         block_uid: str,
         username: str,
-        tasks_json: Optional[str] = None,
+        tasks_json: Optional[list] = None,
     ) -> str:
         """Create an AI employee button in a block's action bar.
 

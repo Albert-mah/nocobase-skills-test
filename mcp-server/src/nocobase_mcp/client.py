@@ -12,6 +12,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+from typing import Any, Optional
 
 import requests
 
@@ -367,8 +368,8 @@ class NB:
     FlowModel CRUD (save/update/destroy), and all high-level page building methods.
     """
 
-    def __init__(self, base_url: str = None, auto_login: bool = True,
-                 account: str = None, password: str = None):
+    def __init__(self, base_url: Optional[str] = None, auto_login: bool = True,
+                 account: Optional[str] = None, password: Optional[str] = None) -> None:
         self.base = base_url or os.environ.get("NB_URL", "http://localhost:14000")
         self.account = account or os.environ.get("NB_USER", "admin@nocobase.com")
         self.password = password or os.environ.get("NB_PASSWORD", "admin123")
@@ -379,32 +380,60 @@ class NB:
         self._field_cache = {}
         self._title_cache = {}
         self._sort_counters = {}
+        self._timeout = 30
         if auto_login:
             self.login()
 
-    def login(self, account: str = None, password: str = None):
+    def login(self, account: Optional[str] = None, password: Optional[str] = None) -> "NB":
         account = account or self.account
         password = password or self.password
         r = self.s.post(f"{self.base}/api/auth:signIn",
-                        json={"account": account, "password": password})
+                        json={"account": account, "password": password},
+                        timeout=self._timeout)
         self.s.headers.update({"Authorization": f"Bearer {r.json()['data']['token']}"})
         return self
+
+    # ── HTTP helpers (with timeout + error checking) ────────────
+
+    def _get(self, path: str, **kwargs) -> requests.Response:
+        """GET with timeout. Returns response (caller checks r.ok)."""
+        kwargs.setdefault("timeout", self._timeout)
+        return self.s.get(f"{self.base}/{path}", **kwargs)
+
+    def _post(self, path: str, **kwargs) -> requests.Response:
+        """POST with timeout. Returns response (caller checks r.ok)."""
+        kwargs.setdefault("timeout", self._timeout)
+        return self.s.post(f"{self.base}/{path}", **kwargs)
+
+    def _get_json(self, path: str, **kwargs):
+        """GET → parse data. Raises APIError on HTTP failure."""
+        r = self._get(path, **kwargs)
+        if not r.ok:
+            raise APIError(r.status_code, r.text[:500], f"{self.base}/{path}")
+        return r.json().get("data")
+
+    def _post_json(self, path: str, **kwargs):
+        """POST → parse data. Raises APIError on HTTP failure."""
+        r = self._post(path, **kwargs)
+        if not r.ok:
+            raise APIError(r.status_code, r.text[:500], f"{self.base}/{path}")
+        return r.json().get("data")
 
     # ── Metadata ────────────────────────────────────────────────
 
     def _load_meta(self, coll):
         if coll in self._field_cache:
             return
-        r = self.s.get(f"{self.base}/api/collections/{coll}/fields:list?pageSize=200")
+        fields = self._get_json(f"api/collections/{coll}/fields:list?pageSize=200") or []
         self._field_cache[coll] = {
             f["name"]: {"interface": f.get("interface", "input"),
                         "type": f.get("type", "string"),
                         "target": f.get("target", "")}
-            for f in r.json().get("data", [])
+            for f in fields
         }
         if not self._title_cache:
-            r2 = self.s.get(f"{self.base}/api/collections:list?paginate=false")
-            for c in r2.json().get("data", []):
+            colls = self._get_json("api/collections:list?paginate=false") or []
+            for c in colls:
                 self._title_cache[c["name"]] = c.get("titleField") or "name"
 
     def _iface(self, coll, field):
@@ -427,49 +456,49 @@ class NB:
 
     # ── Low-level FlowModel API ───────────────────────────────────
 
-    def save(self, use, parent, sub_key, sub_type, sp=None, sort=0, u=None, **kw):
+    def save(self, use: str, parent: str, sub_key: str, sub_type: str,
+             sp: Optional[dict] = None, sort: int = 0, u: Optional[str] = None, **kw) -> str:
         u = u or uid()
         data = {"uid": u, "use": use, "parentId": parent,
                 "subKey": sub_key, "subType": sub_type,
                 "stepParams": sp or {}, "sortIndex": sort, "flowRegistry": {}, **kw}
-        r = self.s.post(f"{self.base}/api/flowModels:save", json=data)
+        r = self._post("api/flowModels:save", json=data)
         if r.ok and r.json().get("data"):
             self.created += 1
         else:
             self.errors.append(f"{use}({u}): {r.text[:100]}")
         return u
 
-    def update(self, u, patch):
+    def update(self, u: str, patch: dict) -> bool:
         """Update existing FlowModel via flowModels:update (GET -> merge -> PUT).
 
         CRITICAL: flowModels:update is FULL REPLACE. Always GET first, deep merge,
         then PUT. Never send partial options.
         """
-        r = self.s.get(f"{self.base}/api/flowModels:get?filterByTk={u}")
+        r = self._get(f"api/flowModels:get?filterByTk={u}")
         if not r.ok:
             return False
         data = r.json().get("data", {})
         opts = {k: v for k, v in data.items() if k not in ("uid", "name")}
         deep_merge(opts, patch)
-        r2 = self.s.post(f"{self.base}/api/flowModels:update?filterByTk={u}",
-                         json={"options": opts})
+        r2 = self._post(f"api/flowModels:update?filterByTk={u}",
+                        json={"options": opts})
         return r2.ok
 
-    def destroy(self, u):
-        self.s.post(f"{self.base}/api/flowModels:destroy?filterByTk={u}")
+    def destroy(self, u: str) -> None:
+        self._post(f"api/flowModels:destroy?filterByTk={u}")
 
-    def destroy_tree(self, u):
+    def destroy_tree(self, u: str) -> int:
         descendants = self._collect_descendants(u)
         to_delete = descendants + [u]
         for uid_ in reversed(to_delete):
-            self.s.post(f"{self.base}/api/flowModels:destroy?filterByTk={uid_}")
+            self._post(f"api/flowModels:destroy?filterByTk={uid_}")
         self._invalidate_cache()
         return len(to_delete)
 
     def _list_all(self):
         if not hasattr(self, '_all_models_cache'):
-            r = self.s.get(f"{self.base}/api/flowModels:list?paginate=false")
-            self._all_models_cache = r.json().get("data", [])
+            self._all_models_cache = self._get_json("api/flowModels:list?paginate=false") or []
         return self._all_models_cache
 
     def _invalidate_cache(self):
@@ -494,7 +523,7 @@ class NB:
     def clean_tab(self, tab_uid):
         to_delete = self._collect_descendants(tab_uid)
         for uid_ in reversed(to_delete):
-            self.s.post(f"{self.base}/api/flowModels:destroy?filterByTk={uid_}")
+            self._post(f"api/flowModels:destroy?filterByTk={uid_}")
         self._sort_counters.pop(tab_uid, None)
         self._invalidate_cache()
         return len(to_delete)
@@ -750,15 +779,16 @@ class NB:
 
     # ── High-level builders ────────────────────────────────────
 
-    def group(self, title, parent_id=None, icon="appstoreoutlined"):
+    def group(self, title: str, parent_id: Optional[int] = None, icon: str = "appstoreoutlined") -> Optional[int]:
         """Create menu group (folder in sidebar). Returns group route id."""
         data = {"type": "group", "title": title, "icon": icon}
         if parent_id is not None:
             data["parentId"] = parent_id
-        r = self.s.post(f"{self.base}/api/desktopRoutes:create", json=data)
-        return r.json().get("data", {}).get("id")
+        result = self._post_json("api/desktopRoutes:create", json=data)
+        return (result or {}).get("id")
 
-    def route(self, title, parent_id, icon="appstoreoutlined", tabs=None):
+    def route(self, title: str, parent_id: int, icon: str = "appstoreoutlined",
+              tabs: Optional[list] = None) -> tuple:
         """Create a page (flowPage) route. Returns (route_id, page_uid, tab_uid_or_dict)."""
         pu, mu = uid(), uid()
         if tabs:
@@ -771,10 +801,10 @@ class NB:
             data = {"type": "flowPage", "title": title, "parentId": parent_id,
                     "schemaUid": pu, "menuSchemaUid": mu, "icon": icon,
                     "enableTabs": True, "children": children}
-            r = self.s.post(f"{self.base}/api/desktopRoutes:create", json=data)
-            self.s.post(f"{self.base}/api/uiSchemas:insert",
-                        json={"type": "void", "x-component": "FlowRoute", "x-uid": pu})
-            rid = r.json().get("data", {}).get("id")
+            result = self._post_json("api/desktopRoutes:create", json=data)
+            self._post("api/uiSchemas:insert",
+                       json={"type": "void", "x-component": "FlowRoute", "x-uid": pu})
+            rid = (result or {}).get("id")
             return rid, pu, tu
         else:
             tu = uid()
@@ -782,13 +812,14 @@ class NB:
                     "schemaUid": pu, "menuSchemaUid": mu, "icon": icon,
                     "enableTabs": False,
                     "children": [{"type": "tabs", "schemaUid": tu, "tabSchemaName": uid(), "hidden": True}]}
-            r = self.s.post(f"{self.base}/api/desktopRoutes:create", json=data)
-            self.s.post(f"{self.base}/api/uiSchemas:insert",
-                        json={"type": "void", "x-component": "FlowRoute", "x-uid": pu})
-            rid = r.json().get("data", {}).get("id")
+            result = self._post_json("api/desktopRoutes:create", json=data)
+            self._post("api/uiSchemas:insert",
+                       json={"type": "void", "x-component": "FlowRoute", "x-uid": pu})
+            rid = (result or {}).get("id")
             return rid, pu, tu
 
-    def menu(self, group_title, parent_id, pages, *, group_icon="appstoreoutlined"):
+    def menu(self, group_title: str, parent_id: int, pages: list,
+             *, group_icon: str = "appstoreoutlined") -> dict:
         """Create a menu group with child pages. Returns dict {title: tab_uid}."""
         gid = self.group(group_title, parent_id, icon=group_icon)
         tabs = {}
@@ -797,8 +828,9 @@ class NB:
             tabs[title] = tu
         return tabs
 
-    def table_block(self, parent, coll, fields, first_click=True, title=None, sort=None,
-                    link_actions=None):
+    def table_block(self, parent: str, coll: str, fields: list, first_click: bool = True,
+                    title: Optional[str] = None, sort: Optional[int] = None,
+                    link_actions: Optional[list] = None) -> tuple:
         """Create standalone TableBlockModel. Returns (tbl, addnew, actcol)."""
         if sort is None:
             sort = self._next_sort(parent)
@@ -824,8 +856,9 @@ class NB:
             "tableColumnSettings": {"title": {"title": '{{t("Actions")}}'}}}, 99)
         return tbl, addnew, actcol
 
-    def filter_form(self, parent, coll, field="name", target_uid=None, sort=None,
-                    label="Search", search_fields=None):
+    def filter_form(self, parent: str, coll: str, field: str = "name",
+                    target_uid: Optional[str] = None, sort: Optional[int] = None,
+                    label: str = "Search", search_fields: Optional[list] = None) -> tuple:
         """Create FilterFormBlock with single search input. Returns (filter_block_uid, filter_item_uid)."""
         if sort is None:
             sort = self._next_sort(parent)
@@ -865,22 +898,23 @@ class NB:
 
         return fb, fi
 
-    def page_layout(self, tab_uid):
+    def page_layout(self, tab_uid: str) -> str:
         """Create BlockGridModel for multi-block page. Returns grid UID."""
         self.clean_tab(tab_uid)
         return self.save("BlockGridModel", tab_uid, "grid", "object")
 
-    def set_layout(self, grid_uid, rows_spec):
+    def set_layout(self, grid_uid: str, rows_spec: list) -> None:
         """Set gridSettings on an existing BlockGridModel. Also writes filterManager."""
         gs = self._build_block_grid(rows_spec)
         self.update(grid_uid, {"stepParams": {"gridSettings": gs}})
 
         fm = getattr(self, '_filter_mappings', {}).get(grid_uid, [])
         if fm:
-            self.s.post(f"{self.base}/api/flowModels:save",
-                        json={"uid": grid_uid, "filterManager": fm})
+            self._post("api/flowModels:save",
+                       json={"uid": grid_uid, "filterManager": fm})
 
-    def sub_table(self, parent_grid, parent_coll, assoc, target_coll, fields, title=None):
+    def sub_table(self, parent_grid: str, parent_coll: str, assoc: str,
+                  target_coll: str, fields: list, title: Optional[str] = None) -> tuple:
         """Create association sub-table. Returns (tbl, addnew)."""
         tbl = self.save("TableBlockModel", parent_grid, "items", "array", {
             "resourceSettings": {"init": {"dataSourceKey": "main", "collectionName": target_coll,
@@ -897,8 +931,8 @@ class NB:
             "tableColumnSettings": {"title": {"title": '{{t("Actions")}}'}}}, 99)
         return tbl, addnew
 
-    def addnew_form(self, addnew_uid, coll, fields, required=None, props=None,
-                    mode="drawer", size="large"):
+    def addnew_form(self, addnew_uid: str, coll: str, fields, required: Optional[list] = None,
+                    props: Optional[dict] = None, mode: str = "drawer", size: str = "large") -> str:
         """Create form under AddNew popup. Returns childpage UID."""
         req = set(required or [])
         self.update(addnew_uid, {"stepParams": {"popupSettings": {"openView": {
@@ -916,8 +950,8 @@ class NB:
         self._build_form_grid(fg, coll, fields, req, props=props)
         return cp
 
-    def edit_action(self, actcol, coll, fields, required=None, props=None,
-                    mode="drawer", size="large"):
+    def edit_action(self, actcol: str, coll: str, fields, required: Optional[list] = None,
+                    props: Optional[dict] = None, mode: str = "drawer", size: str = "large") -> str:
         """Create Edit action + form. Returns edit action UID."""
         req = set(required or [])
         ea = self.save("EditActionModel", actcol, "actions", "array", {
@@ -937,7 +971,8 @@ class NB:
         self._build_form_grid(fg, coll, fields, req, props=props)
         return ea
 
-    def detail_popup(self, parent_uid, coll, tabs, mode="drawer", size="large"):
+    def detail_popup(self, parent_uid: str, coll: str, tabs: list,
+                     mode: str = "drawer", size: str = "large") -> str:
         """Multi-tab detail popup. Returns childpage UID."""
         self.update(parent_uid, {"stepParams": {"popupSettings": {"openView": {
             "collectionName": coll, "dataSourceKey": "main",
@@ -955,7 +990,7 @@ class NB:
 
     # ── JS blocks ──────────────────────────────────────────────
 
-    def js_block(self, parent_grid, title, code, sort=None):
+    def js_block(self, parent_grid: str, title: str, code: str, sort: Optional[int] = None) -> str:
         """Create page-level JSBlockModel."""
         if sort is None:
             sort = self._next_sort(parent_grid)
@@ -963,7 +998,8 @@ class NB:
               "cardSettings": {"titleDescription": {"title": title}}}
         return self.save("JSBlockModel", parent_grid, "items", "array", sp, sort)
 
-    def js_column(self, table_uid, title, code, sort=50, width=None):
+    def js_column(self, table_uid: str, title: str, code: str, sort: int = 50,
+                  width: Optional[int] = None) -> str:
         """Create JSColumnModel in table."""
         sp = {"jsSettings": {"runJs": {"version": "v1", "code": code}},
               "tableColumnSettings": {"title": {"title": title}}}
@@ -971,7 +1007,7 @@ class NB:
             sp["tableColumnSettings"]["width"] = {"width": width}
         return self.save("JSColumnModel", table_uid, "columns", "array", sp, sort)
 
-    def js_item(self, form_grid, title, code, sort=0):
+    def js_item(self, form_grid: str, title: str, code: str, sort: int = 0) -> str:
         """Create JSItemModel in form/details."""
         sp = {"jsSettings": {"runJs": {"version": "v1", "code": code}},
               "editItemSettings": {"showLabel": {"showLabel": True, "title": title}}}
@@ -979,15 +1015,42 @@ class NB:
 
     # ── KPI ────────────────────────────────────────────────────
 
-    def kpi(self, parent, title, coll, filter_=None, color=None, sort=None):
-        """Create a KPI card that queries API and shows count."""
+    def kpi(self, parent: str, title: str, coll: str, filter_: Optional[dict] = None,
+            color: Optional[str] = None, sort: Optional[int] = None) -> str:
+        """Create a KPI card that queries API and shows count.
+
+        filter_ values support "thisMonth" shorthand — it will be replaced
+        with a JS-computed $dateBetween range at runtime.
+        """
         filter_js = ""
+        date_preamble = ""
         if filter_:
-            filter_js = f", filter: {json.dumps(filter_)}"
+            # Pre-process "thisMonth" → JS-computed $dateBetween
+            processed = {}
+            has_this_month = False
+            for k, v in filter_.items():
+                field = k.replace(".$dateOn", "")
+                if v == "thisMonth" or (isinstance(v, dict) and v.get("$dateOn") == "thisMonth"):
+                    has_this_month = True
+                    # Use JS placeholder — replaced below
+                    processed[field] = {"$dateBetween": ["__MONTH_START__", "__MONTH_END__"]}
+                else:
+                    processed[k] = v
+            if has_this_month:
+                date_preamble = (
+                    "    const _now = new Date();\n"
+                    "    const _ms = new Date(_now.getFullYear(), _now.getMonth(), 1).toISOString();\n"
+                    "    const _me = new Date(_now.getFullYear(), _now.getMonth() + 1, 0, 23, 59, 59).toISOString();\n"
+                )
+                raw = json.dumps(processed)
+                raw = raw.replace('"__MONTH_START__"', "_ms").replace('"__MONTH_END__"', "_me")
+                filter_js = f", filter: {raw}"
+            else:
+                filter_js = f", filter: {json.dumps(processed)}"
         color_js = f", color:'{color}'" if color else ""
         code = f"""(async () => {{
   try {{
-    const r = await ctx.api.request({{
+{date_preamble}    const r = await ctx.api.request({{
       url: '{coll}:list',
       params: {{ paginate: false{filter_js} }}
     }});
@@ -1007,9 +1070,9 @@ class NB:
 
     # ── Event flows ────────────────────────────────────────────
 
-    def event_flow(self, model_uid, event_name, code):
+    def event_flow(self, model_uid: str, event_name: str, code: str) -> Optional[str]:
         """Add event flow (runjs step) to an existing FlowModel node."""
-        r = self.s.get(f"{self.base}/api/flowModels:get?filterByTk={model_uid}")
+        r = self._get(f"api/flowModels:get?filterByTk={model_uid}")
         if not r.ok:
             self.errors.append(f"event_flow GET {model_uid}: {r.text[:100]}")
             return None
@@ -1028,7 +1091,7 @@ class NB:
         self.update(model_uid, {"flowRegistry": registry})
         return flow_key
 
-    def form_logic(self, form_uid, description, code=None):
+    def form_logic(self, form_uid: str, description: str, code: Optional[str] = None) -> Optional[str]:
         """Add formValuesChange event flow."""
         if code is None:
             code = "// Form Logic — formValuesChange\n"
@@ -1043,7 +1106,7 @@ class NB:
                      "})();")
         return self.event_flow(form_uid, "formValuesChange", code)
 
-    def before_render(self, model_uid, description, code=None):
+    def before_render(self, model_uid: str, description: str, code: Optional[str] = None) -> Optional[str]:
         """Add beforeRender event flow."""
         if code is None:
             code = "// beforeRender\n"
@@ -1054,7 +1117,8 @@ class NB:
 
     # ── Outline (planning placeholders) ────────────────────────
 
-    def outline(self, parent, title, ctx_info, sort=None, kind="block"):
+    def outline(self, parent: str, title: str, ctx_info: dict, sort: Optional[int] = None,
+                kind: str = "block") -> str:
         """Create JS block/column/item that displays a planning outline on the page.
 
         The outline shows all context needed for later implementation by AI/human.
@@ -1117,10 +1181,9 @@ class NB:
 
     # ── Find helpers ───────────────────────────────────────────
 
-    def find_click_field(self, tbl_uid, field_name="name"):
+    def find_click_field(self, tbl_uid: str, field_name: str = "name") -> Optional[str]:
         """Find the DisplayFieldModel UID of a click-to-open column."""
-        r = self.s.get(f"{self.base}/api/flowModels:list?paginate=false")
-        items = r.json().get("data", [])
+        items = self._get_json("api/flowModels:list?paginate=false") or []
         for it in items:
             if it.get("parentId") == tbl_uid and it.get("use") == "TableColumnModel":
                 fp = it.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath")
@@ -1132,8 +1195,9 @@ class NB:
 
     # ── AI Employee ────────────────────────────────────────────
 
-    def ai_employee_create(self, username, nickname, position, avatar, bio,
-                           about, greeting, skills, model_settings=None):
+    def ai_employee_create(self, username: str, nickname: str, position: str, avatar: str,
+                           bio: str, about: str, greeting: str, skills: list,
+                           model_settings: Optional[dict] = None) -> str:
         """Create an AI employee. Returns username."""
         values = {
             "username": username,
@@ -1158,31 +1222,28 @@ class NB:
             "knowledgeBase": {"topK": 3, "score": "0.6", "knowledgeBaseIds": []},
             "knowledgeBasePrompt": "From knowledge base:\n{knowledgeBaseData}\nanswer user's question using this information.",
         }
-        r = self.s.post(f"{self.base}/api/aiEmployees:create", json=values)
-        return r.json().get("data", {}).get("username", username)
+        result = self._post_json("api/aiEmployees:create", json=values)
+        return (result or {}).get("username", username)
 
-    def ai_employee_list(self):
+    def ai_employee_list(self) -> list:
         """List all AI employees."""
-        r = self.s.get(f"{self.base}/api/aiEmployees:list?paginate=false")
-        return r.json().get("data", [])
+        return self._get_json("api/aiEmployees:list?paginate=false") or []
 
-    def ai_employee_get(self, username):
+    def ai_employee_get(self, username: str) -> dict:
         """Get AI employee by username."""
-        r = self.s.get(f"{self.base}/api/aiEmployees:get?filterByTk={username}")
-        return r.json().get("data", {})
+        return self._get_json(f"api/aiEmployees:get?filterByTk={username}") or {}
 
-    def ai_employee_update(self, username, values):
+    def ai_employee_update(self, username: str, values: dict) -> bool:
         """Update AI employee fields."""
-        r = self.s.post(f"{self.base}/api/aiEmployees:update?filterByTk={username}",
-                        json=values)
+        r = self._post(f"api/aiEmployees:update?filterByTk={username}", json=values)
         return r.ok
 
-    def ai_employee_delete(self, username):
+    def ai_employee_delete(self, username: str) -> bool:
         """Delete AI employee by username."""
-        r = self.s.post(f"{self.base}/api/aiEmployees:destroy?filterByTk={username}")
+        r = self._post(f"api/aiEmployees:destroy?filterByTk={username}")
         return r.ok
 
-    def ai_shortcut_list(self, page_schema_uid, employees):
+    def ai_shortcut_list(self, page_schema_uid: str, employees: list) -> str:
         """Create floating avatar shortcuts on a page.
 
         Args:
@@ -1202,7 +1263,7 @@ class NB:
                       props={"aiEmployee": {"username": emp["username"]}})
         return container_uid
 
-    def ai_button(self, block_uid, username, tasks=None):
+    def ai_button(self, block_uid: str, username: str, tasks: Optional[list] = None) -> str:
         """Create AI employee button in a block's action bar.
 
         Args:
@@ -1226,7 +1287,7 @@ class NB:
 
     # ── Workflow API ─────────────────────────────────────────────
 
-    def workflow_list(self, enabled=None, prefix=None):
+    def workflow_list(self, enabled: Optional[bool] = None, prefix: Optional[str] = None) -> list:
         """List workflows (current versions only).
 
         Args:
@@ -1237,7 +1298,7 @@ class NB:
         params = {"pageSize": 200}
         if enabled is not None:
             params["filter[enabled]"] = str(enabled).lower()
-        r = self.s.get(f"{self.base}/api/workflows:list", params=params)
+        r = self._get("api/workflows:list", params=params)
         if not r.ok:
             return []
         wfs = [w for w in r.json().get("data", []) if w.get("current", True)]
@@ -1245,20 +1306,21 @@ class NB:
             wfs = [w for w in wfs if w.get("title", "").startswith(prefix)]
         return wfs
 
-    def workflow_get(self, wf_id):
+    def workflow_get(self, wf_id: int) -> tuple:
         """Get workflow details + its nodes.
 
         Returns: (workflow_dict, nodes_list)
         """
-        r = self.s.get(f"{self.base}/api/workflows:get?filterByTk={wf_id}")
+        r = self._get(f"api/workflows:get?filterByTk={wf_id}")
         if not r.ok:
             return None, []
         wf = r.json().get("data")
-        r2 = self.s.get(f"{self.base}/api/workflows/{wf_id}/nodes:list")
+        r2 = self._get(f"api/workflows/{wf_id}/nodes:list")
         nodes = r2.json().get("data", []) if r2.ok else []
         return wf, nodes
 
-    def workflow_create(self, title, trigger_type, trigger_config, sync=False):
+    def workflow_create(self, title: str, trigger_type: str, trigger_config: dict,
+                        sync: bool = False) -> Optional[dict]:
         """Create a workflow.
 
         Args:
@@ -1275,26 +1337,26 @@ class NB:
             "enabled": False,
             "sync": sync,
         }
-        r = self.s.post(f"{self.base}/api/workflows:create", json=data)
+        r = self._post("api/workflows:create", json=data)
         if not r.ok:
             return None
         return r.json().get("data")
 
-    def workflow_update(self, wf_id, values):
+    def workflow_update(self, wf_id: int, values: dict) -> bool:
         """Update workflow fields (enabled, title, config, etc.)."""
-        r = self.s.post(f"{self.base}/api/workflows:update?filterByTk={wf_id}",
-                        json=values)
+        r = self._post(f"api/workflows:update?filterByTk={wf_id}", json=values)
         return r.ok
 
-    def workflow_delete(self, wf_id):
+    def workflow_delete(self, wf_id: int) -> bool:
         """Delete a workflow (auto-disables first)."""
-        self.s.post(f"{self.base}/api/workflows:update?filterByTk={wf_id}",
-                    json={"enabled": False})
-        r = self.s.post(f"{self.base}/api/workflows:destroy?filterByTk={wf_id}")
+        self._post(f"api/workflows:update?filterByTk={wf_id}",
+                   json={"enabled": False})
+        r = self._post(f"api/workflows:destroy?filterByTk={wf_id}")
         return r.ok
 
-    def workflow_node_create(self, wf_id, node_type, title, config,
-                              upstream_id=None, branch_index=None):
+    def workflow_node_create(self, wf_id: int, node_type: str, title: str, config: dict,
+                              upstream_id: Optional[int] = None,
+                              branch_index: Optional[int] = None) -> Optional[dict]:
         """Create a workflow node.
 
         Args:
@@ -1313,26 +1375,24 @@ class NB:
             data["upstreamId"] = upstream_id
         if branch_index is not None:
             data["branchIndex"] = branch_index
-        r = self.s.post(f"{self.base}/api/workflows/{wf_id}/nodes:create",
-                        json=data)
+        r = self._post(f"api/workflows/{wf_id}/nodes:create", json=data)
         if not r.ok:
             return None
         return r.json().get("data")
 
-    def workflow_node_update(self, node_id, values):
+    def workflow_node_update(self, node_id: int, values: dict) -> bool:
         """Update a workflow node."""
-        r = self.s.post(f"{self.base}/api/flow_nodes:update?filterByTk={node_id}",
-                        json=values)
+        r = self._post(f"api/flow_nodes:update?filterByTk={node_id}", json=values)
         return r.ok
 
-    def workflow_node_delete(self, node_id):
+    def workflow_node_delete(self, node_id: int) -> bool:
         """Delete a workflow node."""
-        r = self.s.post(f"{self.base}/api/flow_nodes:destroy?filterByTk={node_id}")
+        r = self._post(f"api/flow_nodes:destroy?filterByTk={node_id}")
         return r.ok
 
     # ── Summary ────────────────────────────────────────────────
 
-    def summary(self):
+    def summary(self) -> dict:
         return {"created": self.created, "errors": self.errors[:10]}
 
 

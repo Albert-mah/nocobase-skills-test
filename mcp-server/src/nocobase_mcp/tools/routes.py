@@ -8,7 +8,7 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from ..client import get_nb_client, NB
+from ..client import get_nb_client, NB, APIError
 from ..utils import uid, safe_json
 
 
@@ -16,24 +16,24 @@ def register_tools(mcp: FastMCP):
     """Register route management tools on the MCP server."""
 
     @mcp.tool()
-    def nb_create_group(title: str, parent_id: Optional[int] = None,
-                        icon: str = "appstoreoutlined") -> str:
+    def nb_create_group(title: str, icon: str = "appstoreoutlined",
+                        parent_id: Optional[int] = None) -> str:
         """Create a menu group (folder) in the NocoBase sidebar.
 
         Groups are purely structural — they hold child pages or sub-groups,
-        but have NO page content themselves.
+        but have NO page content themselves. Created at top level by default.
 
         Args:
             title: Display name for the menu group
-            parent_id: Parent group route ID. None for top-level group.
             icon: Ant Design icon name (e.g. "homeoutlined", "settingoutlined")
+            parent_id: Parent group route ID. Default None = top-level.
+                       Only set this to create a sub-group under an existing group.
 
         Returns:
             JSON with group route ID.
 
         Example:
-            nb_create_group("Asset Management", icon="bankoutlined")
-            nb_create_group("Sub Module", parent_id=123)
+            nb_create_group("Asset Management", "bankoutlined")
         """
         nb = get_nb_client()
         gid = nb.group(title, parent_id, icon=icon)
@@ -42,7 +42,7 @@ def register_tools(mcp: FastMCP):
     @mcp.tool()
     def nb_create_page(title: str, parent_id: int,
                        icon: str = "appstoreoutlined",
-                       tabs: Optional[str] = None) -> str:
+                       tabs: Optional[list] = None) -> str:
         """Create a page (flowPage) route in the NocoBase sidebar.
 
         Pages hold actual content (tables, forms, charts, etc.).
@@ -69,27 +69,28 @@ def register_tools(mcp: FastMCP):
         return json.dumps({"route_id": rid, "page_uid": pu, "tab_uids": tu})
 
     @mcp.tool()
-    def nb_create_menu(group_title: str, parent_id: int,
+    def nb_create_menu(group_title: str,
                        pages: str,
-                       group_icon: str = "appstoreoutlined") -> str:
-        """Create a menu group with multiple child pages in one call.
+                       group_icon: str = "appstoreoutlined",
+                       parent_id: Optional[int] = None) -> str:
+        """Create a top-level menu group with child pages in one call.
 
-        This is the preferred way to build sidebar structure. Creates:
-        1. A group folder
-        2. Individual pages under it (each with a tab UID for content)
+        Creates a top-level sidebar group with pages directly under it.
+        Each page gets a tab UID for adding content via nb_crud_page.
 
         Args:
             group_title: Display name for the menu group
-            parent_id: Parent group route ID (use None or 0 for top-level)
             pages: JSON array of [title, icon] pairs.
                    Example: '[["Asset Ledger","databaseoutlined"],["Purchases","shoppingcartoutlined"]]'
             group_icon: Icon for the group folder
+            parent_id: Parent group route ID. Default None = top-level menu.
+                       Only set this when creating a sub-group under an existing group.
 
         Returns:
             JSON mapping page titles to their tab UIDs.
 
         Example:
-            nb_create_menu("Asset Mgmt", 1, '[["Ledger","databaseoutlined"],["Purchase","shoppingcartoutlined"]]')
+            nb_create_menu("CRM", '[["Customers","idcardoutlined"],["Contacts","useroutlined"]]', "teamoutlined")
         """
         nb = get_nb_client()
         page_list = safe_json(pages)
@@ -104,9 +105,7 @@ def register_tools(mcp: FastMCP):
         Returns a tree of groups, pages, and tabs showing the sidebar structure.
         """
         nb = get_nb_client()
-        r = nb.s.get(f"{nb.base}/api/desktopRoutes:list",
-                     params={"paginate": "false", "tree": "true"})
-        routes = r.json().get("data", [])
+        routes = nb._get_json("api/desktopRoutes:list?paginate=false&tree=true") or []
 
         lines = []
         _format_route_tree(routes, lines, 0)
@@ -126,11 +125,9 @@ def register_tools(mcp: FastMCP):
         """
         nb = get_nb_client()
         try:
-            r = nb.s.post(f"{nb.base}/api/desktopRoutes:destroy?filterByTk={route_id}")
-            if r.ok:
-                return f"Deleted route {route_id}"
-            return f"ERROR: {r.text[:200]}"
-        except Exception as e:
+            nb._post_json(f"api/desktopRoutes:destroy?filterByTk={route_id}")
+            return f"Deleted route {route_id}"
+        except APIError as e:
             return f"ERROR: {e}"
 
 

@@ -54,7 +54,7 @@ def register_tools(mcp: FastMCP):
         collection: str,
         field: str,
         interface: str,
-        enum: Optional[str] = None,
+        enum: Optional[list] = None,
         title: Optional[str] = None,
         precision: Optional[int] = None,
     ) -> str:

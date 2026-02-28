@@ -4,6 +4,7 @@ Extracted from nb-setup.py.
 """
 
 import json
+import os
 import subprocess
 from typing import Optional
 
@@ -14,6 +15,43 @@ from ..client import (
     SYSTEM_FIELD_PAYLOADS, SYSTEM_FIELD_MAP,
 )
 from ..utils import safe_json
+from .fields import _build_field_update
+
+
+def _ensure_system_columns(table_name: str) -> str:
+    """Ensure system columns exist in DB via SQL ALTER TABLE.
+
+    NocoBase requires createdAt/updatedAt/createdById/updatedById columns.
+    This function guarantees they exist at the DB level, regardless of whether
+    the original DDL included them.
+
+    Returns summary string.
+    """
+    db_url = os.environ.get("NB_DB_URL", "postgresql://nocobase:nocobase@localhost:5435/nocobase")
+    sql = f'''
+        ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "createdById" BIGINT;
+        ALTER TABLE "{table_name}" ADD COLUMN IF NOT EXISTS "updatedById" BIGINT;
+    '''
+    try:
+        import psycopg2
+        with psycopg2.connect(db_url) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(sql)
+        return "OK"
+    except ImportError:
+        try:
+            result = subprocess.run(
+                ["psql", db_url, "-c", sql],
+                capture_output=True, text=True, timeout=10,
+            )
+            return "OK" if result.returncode == 0 else f"ERROR: {result.stderr.strip()}"
+        except Exception as e:
+            return f"ERROR: {e}"
+    except Exception as e:
+        return f"ERROR: {e}"
 
 
 def register_tools(mcp: FastMCP):
@@ -26,6 +64,10 @@ def register_tools(mcp: FastMCP):
         Uses psql command-line tool. For bulk DDL (CREATE TABLE, ALTER TABLE),
         this is faster and more reliable than API calls.
 
+        **Auto system columns**: When CREATE TABLE statements are detected,
+        automatically adds createdAt/updatedAt/createdById/updatedById columns
+        to each created table. You do NOT need to include these in your DDL.
+
         Args:
             sql: SQL statement(s) to execute. Multiple statements separated by semicolons.
             db_url: PostgreSQL connection URL. Default: postgresql://nocobase:nocobase@localhost:5435/nocobase
@@ -37,29 +79,40 @@ def register_tools(mcp: FastMCP):
             nb_execute_sql("CREATE TABLE IF NOT EXISTS nb_pm_projects (id BIGSERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL)")
         """
         import os
+        import re
         db_url = db_url or os.environ.get("NB_DB_URL", "postgresql://nocobase:nocobase@localhost:5435/nocobase")
         # Try psycopg2 first (no external binary needed)
         try:
             import psycopg2
-            conn = psycopg2.connect(db_url)
-            conn.autocommit = True
-            cur = conn.cursor()
-            cur.execute(sql)
-            # Try to fetch results if it was a SELECT
-            try:
-                rows = cur.fetchall()
-                if rows:
-                    cols = [d[0] for d in cur.description] if cur.description else []
-                    lines = ["\t".join(cols)] if cols else []
-                    for row in rows:
-                        lines.append("\t".join(str(v) for v in row))
-                    result = "\n".join(lines)
+            with psycopg2.connect(db_url) as conn:
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+                    # Try to fetch results if it was a SELECT
+                    try:
+                        rows = cur.fetchall()
+                        if rows:
+                            cols = [d[0] for d in cur.description] if cur.description else []
+                            lines = ["\t".join(cols)] if cols else []
+                            for row in rows:
+                                lines.append("\t".join(str(v) for v in row))
+                            result = "\n".join(lines)
+                        else:
+                            result = "OK (0 rows)"
+                    except psycopg2.ProgrammingError:
+                        result = f"OK ({cur.rowcount} rows affected)" if cur.rowcount >= 0 else "OK"
+            # Auto-add system columns for any CREATE TABLE statements
+            tables = re.findall(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)', sql, re.IGNORECASE)
+            if tables:
+                sys_results = []
+                for tbl in tables:
+                    sr = _ensure_system_columns(tbl)
+                    if sr != "OK":
+                        sys_results.append(f"{tbl}: {sr}")
+                if sys_results:
+                    result += "\n[system-cols] " + "; ".join(sys_results)
                 else:
-                    result = "OK (0 rows)"
-            except psycopg2.ProgrammingError:
-                result = f"OK ({cur.rowcount} rows affected)" if cur.rowcount >= 0 else "OK"
-            cur.close()
-            conn.close()
+                    result += f"\n[system-cols] added to {len(tables)} tables"
             return result
         except ImportError:
             pass  # Fall through to psql
@@ -68,14 +121,27 @@ def register_tools(mcp: FastMCP):
 
         # Fallback: psql CLI
         try:
-            result = subprocess.run(
+            proc = subprocess.run(
                 ["psql", db_url, "-c", sql],
                 capture_output=True, text=True, timeout=30,
             )
-            output = result.stdout.strip()
-            if result.returncode != 0:
-                return f"ERROR: {result.stderr.strip()}\n{output}"
-            return output or "OK (no output)"
+            output = proc.stdout.strip()
+            if proc.returncode != 0:
+                return f"ERROR: {proc.stderr.strip()}\n{output}"
+            result = output or "OK (no output)"
+            # Auto-add system columns for any CREATE TABLE statements
+            tables = re.findall(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)', sql, re.IGNORECASE)
+            if tables:
+                sys_results = []
+                for tbl in tables:
+                    sr = _ensure_system_columns(tbl)
+                    if sr != "OK":
+                        sys_results.append(f"{tbl}: {sr}")
+                if sys_results:
+                    result += "\n[system-cols] " + "; ".join(sys_results)
+                else:
+                    result += f"\n[system-cols] added to {len(tables)} tables"
+            return result
         except FileNotFoundError:
             return "ERROR: Neither psycopg2 nor psql available. Install: pip install psycopg2-binary"
         except subprocess.TimeoutExpired:
@@ -135,7 +201,21 @@ def register_tools(mcp: FastMCP):
         client = get_stdlib_client()
         results = []
 
-        # Create system fields for specific collection if requested
+        # Ensure system columns in DB + create field metadata
+        if collection:
+            # Guarantee DB columns exist first
+            col_result = _ensure_system_columns(collection)
+            if col_result != "OK":
+                results.append(f"System columns: {col_result}")
+
+        # Global sync (DB → NocoBase metadata)
+        try:
+            client.post("/api/mainDataSource:syncFields", expect_empty=True)
+            results.append("Fields synced successfully")
+        except APIError as e:
+            results.append(f"Sync error: {e}")
+
+        # Create system field metadata via API
         if collection:
             try:
                 resp = client.get(f"/api/collections/{collection}/fields:list?paginate=false")
@@ -160,13 +240,6 @@ def register_tools(mcp: FastMCP):
             except APIError as e:
                 results.append(f"System fields error: {e}")
 
-        # Global sync
-        try:
-            client.post("/api/mainDataSource:syncFields", expect_empty=True)
-            results.append("Fields synced successfully")
-        except APIError as e:
-            results.append(f"Sync error: {e}")
-
         # Report field count if collection specified
         if collection:
             try:
@@ -182,8 +255,8 @@ def register_tools(mcp: FastMCP):
     def nb_setup_collection(
         name: str,
         title: str,
-        fields_json: Optional[str] = None,
-        relations_json: Optional[str] = None,
+        fields_json: Optional[dict] = None,
+        relations_json: Optional[list] = None,
         tree: Optional[str] = None,
     ) -> str:
         """Register a collection, sync fields, upgrade interfaces, and create relations — all in one call.
@@ -244,7 +317,19 @@ def register_tools(mcp: FastMCP):
                 results.append(f"[register] ERROR: {e}")
                 return "\n".join(results)
 
-        # Step 2: Create system fields + sync
+        # Step 2: Ensure system columns in DB + sync + create system field metadata
+        # 2a: Guarantee DB columns exist (defensive — works regardless of DDL)
+        col_result = _ensure_system_columns(name)
+        if col_result != "OK":
+            results.append(f"[system-cols] {col_result}")
+
+        # 2b: Sync DB → NocoBase metadata
+        try:
+            client.post("/api/mainDataSource:syncFields", expect_empty=True)
+        except APIError:
+            pass
+
+        # 2c: Create system field metadata via API (for proper ORM mapping)
         try:
             resp = client.get(f"/api/collections/{name}/fields:list?paginate=false")
             existing_names = {f["name"] for f in resp.get("data", [])}
@@ -260,12 +345,7 @@ def register_tools(mcp: FastMCP):
                 except APIError:
                     pass
 
-        try:
-            client.post("/api/mainDataSource:syncFields", expect_empty=True)
-        except APIError:
-            pass
-
-        # Re-fetch fields after sync
+        # Re-fetch fields after system field creation
         try:
             resp = client.get(f"/api/collections/{name}/fields:list?paginate=false")
             fields = resp.get("data", [])

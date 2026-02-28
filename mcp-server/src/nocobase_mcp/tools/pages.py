@@ -78,7 +78,7 @@ def register_tools(mcp: FastMCP):
         addnew_uid: str,
         collection: str,
         fields_dsl: str,
-        props: Optional[str] = None,
+        props: Optional[dict] = None,
     ) -> str:
         """Create a form for the AddNew popup of a table.
 
@@ -114,7 +114,7 @@ def register_tools(mcp: FastMCP):
         actcol_uid: str,
         collection: str,
         fields_dsl: str,
-        props: Optional[str] = None,
+        props: Optional[dict] = None,
     ) -> str:
         """Create an Edit action with form in the table actions column.
 
@@ -216,7 +216,7 @@ def register_tools(mcp: FastMCP):
         parent: str,
         title: str,
         collection: str,
-        filter_: Optional[str] = None,
+        filter_: Optional[dict] = None,
         color: Optional[str] = None,
     ) -> str:
         """Create a KPI card that shows a count from a collection.
@@ -460,9 +460,9 @@ def register_tools(mcp: FastMCP):
         collection: str,
         table_fields: str,
         form_fields: str,
-        filter_fields: Optional[str] = None,
-        kpis_json: Optional[str] = None,
-        detail_json: Optional[str] = None,
+        filter_fields: Optional[list] = None,
+        kpis_json: Optional[list] = None,
+        detail_json: Optional[list] = None,
         table_title: Optional[str] = None,
     ) -> str:
         """Build a complete CRUD page in one call — layout + KPIs + filter + table + forms + popup.
@@ -498,7 +498,12 @@ def register_tools(mcp: FastMCP):
                   [{"title":"Tab Name", "fields":"field DSL or blocks array"},
                    {"title":"Sub Items", "assoc":"items", "coll":"child_collection", "fields":["f1","f2"]}]
                 Example: '[{"title":"Details","fields":"name | code\\nstatus"},{"title":"Tasks","assoc":"tasks","coll":"nb_pm_tasks","fields":["name","status"]}]'
-                Set to "none" or omit to skip detail popup.
+                **Default behavior (omitted)**: auto-generates a "详情" tab using the
+                same field layout as the Edit form (form_fields DSL minus required markers).
+                This gives every page a meaningful detail popup with zero extra work.
+                Only specify detail_json when you need sub-table tabs, custom blocks,
+                or a different layout from the edit form.
+                Set to "none" to explicitly skip detail popup creation.
             table_title: Optional title text displayed above the table card.
 
         Returns:
@@ -571,13 +576,22 @@ def register_tools(mcp: FastMCP):
         element_count += 1
 
         # Step 8: Detail popup
-        if detail_json and detail_json != "none":
-            tabs = safe_json(detail_json)
-            click_uid = nb.find_click_field(tbl_uid, cols[0])
-            if click_uid:
-                nb.detail_popup(click_uid, collection, tabs, mode="drawer", size="large")
-                element_count += 1
-                result["detail_popup"] = True
+        # When detail_json is omitted, auto-generate from form_fields DSL
+        # (same layout as Edit form, minus required markers).
+        # This ensures every page has a meaningful detail popup — agents
+        # don't need to specify detail_json unless they want sub-tabs or
+        # sub-tables beyond the main detail fields.
+        click_uid = nb.find_click_field(tbl_uid, cols[0])
+        if click_uid:
+            if detail_json and detail_json != "none":
+                tabs = safe_json(detail_json)
+            else:
+                # Strip required markers (* and :N widths are kept for layout)
+                detail_fields = form_fields.replace("*", "")
+                tabs = [{"title": "详情", "fields": detail_fields}]
+            nb.detail_popup(click_uid, collection, tabs, mode="drawer", size="large")
+            element_count += 1
+            result["detail_popup"] = True
 
         result["elements_created"] = element_count
         return json.dumps(result)

@@ -23,16 +23,13 @@ class PageTool:
     def _load_models(self, force=False):
         if self._models and not force:
             return self._models
-        r = self.nb.s.get(f"{self.nb.base}/api/flowModels:list?paginate=false")
-        self._models = r.json().get("data", [])
+        self._models = self.nb._get_json("api/flowModels:list?paginate=false") or []
         return self._models
 
     def _load_routes(self, force=False):
         if self._routes and not force:
             return self._routes
-        r = self.nb.s.get(f"{self.nb.base}/api/desktopRoutes:list",
-                          params={"paginate": "false", "tree": "true"})
-        self._routes = r.json().get("data", [])
+        self._routes = self.nb._get_json("api/desktopRoutes:list?paginate=false&tree=true") or []
         return self._routes
 
     def _children_map(self):
@@ -183,31 +180,39 @@ class PageTool:
         """Generate a DSL-style visual representation of a page's structure.
 
         Output mirrors nb_crud_page input format for easy comparison.
+        Resolves ReferenceBlockModel and popupTemplate references one level
+        deep, using a visited set to prevent cycles (graph nodes).
         """
         tab_uid = self._find_tab_uid(page_title)
         if not tab_uid:
             return f"Page '{page_title}' not found"
         cm = self._children_map()
         tree = self._build_tree(tab_uid, cm)
+        visited = set()  # cycle detection for graph references
         lines = [f"# {page_title}  (tab={tab_uid})"]
-        # Find the BlockGridModel
+        self._inspect_grid(tree, cm, lines, visited)
+        return "\n".join(lines)
+
+    def _inspect_grid(self, tree, cm, lines, visited):
+        """Inspect a BlockGridModel within a tree node."""
         grids = [c for c in tree.get("children", []) if "BlockGrid" in c.get("use", "")]
         if not grids:
             lines.append("(empty page)")
-            return "\n".join(lines)
+            return
         grid = grids[0]
         gs = grid.get("stepParams", {}).get("gridSettings", {}).get("grid", {})
         rows = gs.get("rows", {})
         sizes = gs.get("sizes", {})
-        # Map uid → child node for quick lookup
         block_map = {c["uid"]: c for c in grid.get("children", [])}
-        # Classify rows into sections
+
+        # Classify blocks
         kpi_blocks = []
+        js_chart_blocks = []
         filter_block = None
-        table_block = None
+        table_blocks = []
         other_blocks = []
-        row_items = list(rows.items())
-        for row_id, cols in row_items:
+        JS_KPI_THRESHOLD = 1000  # chars: below = KPI card, above = chart/dashboard
+        for row_id, cols in rows.items():
             row_sizes = sizes.get(row_id, [24] * len(cols))
             for ci, col_uids in enumerate(cols):
                 for buid in col_uids:
@@ -215,20 +220,31 @@ class PageTool:
                     if not node:
                         continue
                     use = node.get("use", "")
+                    sz = row_sizes[ci] if ci < len(row_sizes) else 24
                     if "JSBlock" in use:
                         sp = node.get("stepParams", {})
                         title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
-                        kpi_blocks.append({"title": title, "row_id": row_id, "size": row_sizes[ci] if ci < len(row_sizes) else 6})
+                        code = (sp.get("jsSettings") or {}).get("runJs", {}).get("code", "")
+                        info = {"title": title, "row_id": row_id, "size": sz, "code_len": len(code)}
+                        if len(code) > JS_KPI_THRESHOLD:
+                            js_chart_blocks.append(info)
+                        else:
+                            kpi_blocks.append(info)
                     elif "FilterForm" in use:
                         filter_block = node
                     elif "TableBlock" in use:
-                        table_block = node
+                        table_blocks.append(node)
+                    elif "Reference" in use:
+                        other_blocks.append(node)
+                    elif "ActionPanel" in use:
+                        other_blocks.append(node)
+                    elif "Chart" in use:
+                        other_blocks.append(node)
                     elif "Details" in use and "Item" not in use:
                         other_blocks.append(node)
 
-        # 1. KPI section
+        # 1. KPI section (small JS blocks, typically <1000c)
         if kpi_blocks:
-            # Check if all KPIs share same row (side-by-side) or separate rows
             kpi_rows = set(k["row_id"] for k in kpi_blocks)
             if len(kpi_rows) == 1:
                 layout = "inline"
@@ -236,91 +252,36 @@ class PageTool:
             else:
                 layout = "stacked"
                 size_str = "24 each"
-            titles = [f'"{k["title"]}"' for k in kpi_blocks]
-            lines.append(f"")
+            titles = [f'"{k["title"] or "(untitled)"}" [JS {k["code_len"]}c]' for k in kpi_blocks]
+            lines.append("")
             lines.append(f"## KPIs ({len(kpi_blocks)}x, {layout}, {size_str})")
             lines.append(f"   {' | '.join(titles)}")
-            if layout == "stacked":
-                lines.append(f"   !! LAYOUT BUG: KPIs in separate rows (should be inline)")
+            if layout == "stacked" and len(kpi_blocks) > 1:
+                lines.append("   !! LAYOUT BUG: KPIs in separate rows (should be inline)")
+
+        # 1b. JS chart/dashboard blocks (large JS blocks, >1000c)
+        if js_chart_blocks:
+            for jc in js_chart_blocks:
+                lines.append("")
+                t = jc["title"] or "(untitled)"
+                lines.append(f'## JSBlock "{t}" [JS {jc["code_len"]}c] (size={jc["size"]})')
 
         # 2. Filter section
         if filter_block:
             field_names = self._extract_filter_fields(filter_block, cm)
-            lines.append(f"")
-            lines.append(f"## Filter")
+            lines.append("")
+            lines.append("## Filter")
             lines.append(f'   filter_fields: {json.dumps(field_names)}')
 
-        # 3. Table section
-        if table_block:
-            sp = table_block.get("stepParams", {})
-            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
-            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
-            col_children = sorted(cm.get(table_block["uid"], []), key=lambda m: m.get("sortIndex", 0))
-            col_names = []
-            js_cols = []
-            addnew_node = edit_node = None
-            for ch in col_children:
-                ch_use = ch.get("use", "")
-                if "JSColumn" in ch_use:
-                    ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
-                    js_cols.append(ct)
-                    col_names.append(f"[JS:{ct}]")
-                elif "TableColumn" in ch_use and "Actions" not in ch_use:
-                    fp = ch.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
-                    if fp:
-                        col_names.append(fp)
-                    else:
-                        ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
-                        col_names.append(ct or "?")
-                elif "AddNew" in ch_use:
-                    addnew_node = ch
-                elif "ActionsColumn" in ch_use or "TableActions" in ch_use:
-                    for act in sorted(cm.get(ch["uid"], []), key=lambda m: m.get("sortIndex", 0)):
-                        if "Edit" in act.get("use", ""):
-                            edit_node = act
-            lines.append(f"")
-            title_str = f' "{title}"' if title else ""
-            lines.append(f"## Table{title_str}  ({coll})")
-            # Output as JSON array matching table_fields format
-            plain_cols = [c for c in col_names if not c.startswith("[JS:")]
-            lines.append(f'   table_fields: {json.dumps(plain_cols)}')
-            if js_cols:
-                lines.append(f'   js_columns: {json.dumps(js_cols)}')
+        # 3. Table section(s)
+        for table_block in table_blocks:
+            self._inspect_table(table_block, cm, lines, visited)
 
-            # 4. AddNew form
-            if addnew_node:
-                dsl = self._extract_form_dsl(addnew_node, cm)
-                lines.append(f"")
-                lines.append(f"   ### AddNew")
-                for dl in dsl.split("\n"):
-                    lines.append(f"       {dl}")
+        # 4. Other blocks (Reference, ActionPanel, Chart, standalone Details)
+        for ob in other_blocks:
+            self._inspect_other_block(ob, cm, lines, visited)
 
-            # 5. Edit form
-            if edit_node:
-                dsl = self._extract_form_dsl(edit_node, cm)
-                lines.append(f"")
-                lines.append(f"   ### Edit")
-                for dl in dsl.split("\n"):
-                    lines.append(f"       {dl}")
-
-            # 6. Detail popup
-            detail_info = self._find_detail_popup(col_children, cm)
-            if detail_info:
-                lines.append(f"")
-                lines.append(f"   ### Detail Popup")
-                for dl in detail_info.split("\n"):
-                    lines.append(f"       {dl}")
-
-            # 7. AI button on table
-            ai_button = [ch for ch in col_children if "AIEmployee" in ch.get("use", "")]
-            if ai_button:
-                for ab in ai_button:
-                    absp = ab.get("stepParams", {})
-                    abis = absp.get("aiEmployeeButtonSettings", {}).get("init", {})
-                    ai_user = abis.get("aiEmployee", "?")
-                    lines.append(f"   AI Button: {ai_user}")
-
-        # 8. AI shortcuts
+        # 5. AI shortcuts
         shortcuts = [c for c in tree.get("children", [])
                      if "AIEmployeeShortcut" in c.get("use", "")]
         if shortcuts:
@@ -334,10 +295,279 @@ class PageTool:
                     if un:
                         names.append(f"{un}:{label}" if label else un)
             if names:
-                lines.append(f"")
+                lines.append("")
                 lines.append(f"## AI Shortcuts: {', '.join(names)}")
 
-        return "\n".join(lines)
+    def _count_events(self, node, cm):
+        """Count event flows on a form node (recursive: walks to find the form)."""
+        fr = node.get("stepParams", {}).get("flowRegistry") or node.get("flowRegistry") or {}
+        # flowRegistry is stored at model level, need to fetch if not in stepParams
+        count = sum(1 for v in fr.values() if v)
+        # Also check children recursively for forms with events
+        for ch in cm.get(node["uid"], []):
+            count += self._count_events(ch, cm)
+        return count
+
+    def _count_linkage(self, node, cm):
+        """Count linkage rules on action/button nodes (recursive)."""
+        sp = node.get("stepParams", {})
+        lr = sp.get("buttonSettings", {}).get("linkageRules", {}).get("value", [])
+        count = len(lr) if lr else 0
+        for ch in cm.get(node["uid"], []):
+            count += self._count_linkage(ch, cm)
+        return count
+
+    def _get_popup_mode(self, action_node, cm):
+        """Extract popup mode+size from an action node (AddNew or Edit)."""
+        for ch in cm.get(action_node["uid"], []):
+            ch_use = ch.get("use", "")
+            if "ChildPage" in ch_use:
+                ps = ch.get("stepParams", {}).get("popupSettings", {}).get("openView", {})
+                mode = ps.get("mode", "")
+                size = ps.get("size", "")
+                if mode:
+                    return f"({mode},{size})" if size else f"({mode})"
+        return ""
+
+    def _count_form_events(self, action_node, cm):
+        """Count event flows inside an action's form tree by fetching each form node."""
+        nb = self.nb
+        count = 0
+        for desc in self._all_descendants(action_node["uid"], cm):
+            use = desc.get("use", "")
+            if "Form" in use and "Grid" not in use and "Item" not in use and "Filter" not in use:
+                try:
+                    data = nb._get_json(f"api/flowModels:get?filterByTk={desc['uid']}")
+                    if data:
+                        fr = data.get("flowRegistry") or {}
+                        count += sum(1 for v in fr.values() if v)
+                except Exception:
+                    pass
+        return count
+
+    def _count_form_linkage(self, action_node, cm):
+        """Count linkage rules inside an action's descendant buttons."""
+        count = 0
+        for desc in self._all_descendants(action_node["uid"], cm):
+            sp = desc.get("stepParams", {})
+            lr = sp.get("buttonSettings", {}).get("linkageRules", {}).get("value", [])
+            if lr:
+                count += len(lr)
+        return count
+
+    def _inspect_table(self, table_block, cm, lines, visited):
+        """Inspect a TableBlockModel and its children."""
+        sp = table_block.get("stepParams", {})
+        coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+        title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+        # Extract sort settings
+        ts = sp.get("tableSettings", {})
+        sort_info = ""
+        default_sorting = ts.get("defaultSorting", {}).get("sort", [])
+        if default_sorting:
+            sort_parts = []
+            for s in default_sorting:
+                if isinstance(s, str):
+                    sort_parts.append(s)
+                elif isinstance(s, list) and len(s) == 2:
+                    sort_parts.append(f"{s[0]} {s[1]}")
+            sort_info = ", ".join(sort_parts)
+
+        col_children = sorted(cm.get(table_block["uid"], []), key=lambda m: m.get("sortIndex", 0))
+        col_names = []
+        js_cols = []
+        addnew_node = edit_node = None
+        other_actions = []
+        for ch in col_children:
+            ch_use = ch.get("use", "")
+            if "JSColumn" in ch_use:
+                ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
+                code = (ch.get("stepParams", {}).get("jsSettings") or {}).get("runJs", {}).get("code", "")
+                js_cols.append(f'"{ct}" [JS {len(code)}c]')
+                col_names.append(f"[JS:{ct}]")
+            elif "TableColumn" in ch_use and "Actions" not in ch_use:
+                fp = ch.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+                if fp:
+                    col_names.append(fp)
+                else:
+                    ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
+                    col_names.append(ct or "?")
+            elif "AddNew" in ch_use:
+                addnew_node = ch
+            elif "ActionsColumn" in ch_use or "TableActions" in ch_use:
+                for act in sorted(cm.get(ch["uid"], []), key=lambda m: m.get("sortIndex", 0)):
+                    act_use = act.get("use", "")
+                    if "Edit" in act_use:
+                        edit_node = act
+                    elif "Link" in act_use:
+                        asp = act.get("stepParams", {})
+                        lt = asp.get("linkActionSettings", {}).get("general", {}).get("title", "")
+                        act_type = asp.get("linkActionSettings", {}).get("general", {}).get("type", "default")
+                        other_actions.append(f'LinkAction "{lt}" ({act_type})')
+        lines.append("")
+        title_str = f' "{title}"' if title else ""
+        sort_str = f"  sort: {sort_info}" if sort_info else ""
+        lines.append(f"## Table{title_str}  ({coll}){sort_str}")
+        plain_cols = [c for c in col_names if not c.startswith("[JS:")]
+        lines.append(f'   table_fields: {json.dumps(plain_cols)}')
+        if js_cols:
+            lines.append(f'   js_columns: [{", ".join(js_cols)}]')
+        if other_actions:
+            for oa in other_actions:
+                lines.append(f"   {oa}")
+
+        # AddNew form
+        if addnew_node:
+            popup_mode = self._get_popup_mode(addnew_node, cm)
+            event_count = self._count_form_events(addnew_node, cm)
+            linkage_count = self._count_form_linkage(addnew_node, cm)
+            annotations = []
+            if event_count:
+                annotations.append(f"[{event_count} events]")
+            if linkage_count:
+                annotations.append(f"[{linkage_count} linkage]")
+            ann_str = "  " + " ".join(annotations) if annotations else ""
+            dsl = self._extract_form_dsl(addnew_node, cm)
+            lines.append("")
+            lines.append(f"   ### AddNew {popup_mode}{ann_str}")
+            for dl in dsl.split("\n"):
+                lines.append(f"       {dl}")
+
+        # Edit form
+        if edit_node:
+            popup_mode = self._get_popup_mode(edit_node, cm)
+            event_count = self._count_form_events(edit_node, cm)
+            linkage_count = self._count_form_linkage(edit_node, cm)
+            annotations = []
+            if event_count:
+                annotations.append(f"[{event_count} events]")
+            if linkage_count:
+                annotations.append(f"[{linkage_count} linkage]")
+            ann_str = "  " + " ".join(annotations) if annotations else ""
+            dsl = self._extract_form_dsl(edit_node, cm)
+            lines.append("")
+            lines.append(f"   ### Edit {popup_mode}{ann_str}")
+            for dl in dsl.split("\n"):
+                lines.append(f"       {dl}")
+
+        # Detail popup
+        detail_info = self._find_detail_popup(col_children, cm, visited)
+        if detail_info:
+            lines.append("")
+            lines.append("   ### Detail Popup")
+            for dl in detail_info.split("\n"):
+                lines.append(f"       {dl}")
+
+        # AI button on table
+        ai_button = [ch for ch in col_children if "AIEmployee" in ch.get("use", "")]
+        if ai_button:
+            for ab in ai_button:
+                absp = ab.get("stepParams", {})
+                abis = absp.get("aiEmployeeButtonSettings", {}).get("init", {})
+                ai_user = abis.get("aiEmployee", "?")
+                lines.append(f"   AI Button: {ai_user}")
+
+    def _inspect_other_block(self, node, cm, lines, visited):
+        """Inspect a non-table top-level block (Reference, ActionPanel, Chart, Details)."""
+        use = node.get("use", "")
+        uid_ = node["uid"]
+        sp = node.get("stepParams", {})
+
+        if "Reference" in use:
+            rs = sp.get("referenceSettings", {})
+            tpl_name = rs.get("useTemplate", {}).get("templateName", "")
+            target_uid = rs.get("target", {}).get("targetUid", "") or rs.get("useTemplate", {}).get("targetUid", "")
+            lines.append("")
+            lines.append(f'## Reference: "{tpl_name}"')
+            # Resolve one level deep with cycle detection
+            if target_uid and target_uid not in visited:
+                visited.add(target_uid)
+                self._inspect_resolved_ref(target_uid, cm, lines, visited, indent=3)
+            elif target_uid:
+                lines.append(f"   (cycle: {target_uid} already visited)")
+
+        elif "ActionPanel" in use:
+            actions = sorted(cm.get(uid_, []), key=lambda m: m.get("sortIndex", 0))
+            action_names = []
+            for act in actions:
+                au = act.get("use", "")
+                asp = act.get("stepParams", {})
+                if "Popup" in au:
+                    ps = asp.get("popupSettings", {}).get("openView", {})
+                    mode = ps.get("mode", "")
+                    coll = ps.get("collectionName", "")
+                    action_names.append(f"Popup({mode},{coll})")
+                elif "Link" in au:
+                    lt = asp.get("linkActionSettings", {}).get("general", {}).get("title", "")
+                    action_names.append(f'Link("{lt}")' if lt else "Link")
+                else:
+                    action_names.append(au.replace("Model", ""))
+            lines.append("")
+            lines.append(f"## ActionPanel: [{', '.join(action_names)}]")
+
+        elif "Chart" in use:
+            lines.append("")
+            lines.append("## ChartBlock")
+
+        elif "Details" in use:
+            dsl = self._form_to_dsl(node, cm)
+            lines.append("")
+            lines.append("## Details")
+            for dl in dsl.split("\n"):
+                lines.append(f"   {dl}")
+
+    def _inspect_resolved_ref(self, target_uid, cm, lines, visited, indent=3):
+        """Resolve a reference target and describe its content."""
+        prefix = " " * indent
+        # The target could be a TableBlockModel, EditFormModel, etc.
+        model = self._model_by_uid(target_uid)
+        if not model:
+            lines.append(f"{prefix}(target {target_uid} not found)")
+            return
+        use = model.get("use", "")
+        sp = model.get("stepParams", {})
+
+        if "TableBlock" in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            cols = sorted(cm.get(target_uid, []), key=lambda m: m.get("sortIndex", 0))
+            col_names = []
+            js_col_names = []
+            for ch in cols:
+                cu = ch.get("use", "")
+                if "JSColumn" in cu:
+                    ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
+                    js_col_names.append(ct)
+                elif "TableColumn" in cu and "Actions" not in cu:
+                    fp = ch.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+                    if fp:
+                        col_names.append(fp)
+            t = f' "{title}"' if title else ""
+            lines.append(f"{prefix}Table{t} ({coll}): {json.dumps(col_names)}")
+            if js_col_names:
+                lines.append(f"{prefix}js_columns: {json.dumps(js_col_names)}")
+            # Also show detail popup if columns have clickToOpen
+            detail_info = self._find_detail_popup(cols, cm, visited)
+            if detail_info:
+                lines.append(f"{prefix}Detail Popup:")
+                for dl in detail_info.split("\n"):
+                    lines.append(f"{prefix}  {dl}")
+
+        elif "Form" in use and "Filter" not in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            dsl = self._form_to_dsl(model, cm)
+            lines.append(f"{prefix}Form ({coll}):")
+            for dl in dsl.split("\n"):
+                lines.append(f"{prefix}  {dl}")
+
+        elif "Details" in use and "Item" not in use:
+            dsl = self._form_to_dsl(model, cm)
+            lines.append(f"{prefix}Details:")
+            for dl in dsl.split("\n"):
+                lines.append(f"{prefix}  {dl}")
+
+        else:
+            lines.append(f"{prefix}{use} (uid={target_uid})")
 
     def _extract_filter_fields(self, filter_node, cm):
         """Extract filter field names from a FilterFormModel."""
@@ -422,27 +652,81 @@ class PageTool:
             return "(empty form)"
         return "\n".join(dsl_lines)
 
-    def _find_detail_popup(self, col_children, cm):
-        """Find detail popup attached to click-to-open column."""
+    def _resolve_template_target(self, tpl_uid):
+        """Resolve a popupTemplateUid to its targetUid via flowModelTemplates API."""
+        try:
+            templates = self.nb._get_json("api/flowModelTemplates:list?paginate=false") or []
+            for t in templates:
+                if t.get("uid") == tpl_uid:
+                    return t.get("targetUid")
+        except Exception:
+            pass
+        return None
+
+    def _find_detail_popup(self, col_children, cm, visited=None):
+        """Find detail popup attached to click-to-open column.
+
+        Resolves popupTemplateUid references one level deep via
+        flowModelTemplates API. Uses visited set for cycle detection.
+        """
+        if visited is None:
+            visited = set()
         for col in col_children:
             if "TableColumn" not in col.get("use", "") or "Actions" in col.get("use", ""):
                 continue
-            dfs = col.get("stepParams", {}).get("displayFieldSettings", {})
-            if not dfs.get("clickToOpen", {}).get("clickToOpen"):
+            # Check clickToOpen on column itself or on child display field
+            col_sp = col.get("stepParams", {})
+            dfs = col_sp.get("displayFieldSettings", {})
+            click_enabled = dfs.get("clickToOpen", {}).get("clickToOpen", False)
+            if not click_enabled:
+                # Also check child field nodes
+                for dch in cm.get(col["uid"], []):
+                    dch_sp = dch.get("stepParams", {})
+                    dch_dfs = dch_sp.get("displayFieldSettings", {})
+                    if dch_dfs.get("clickToOpen", {}).get("clickToOpen", False):
+                        click_enabled = True
+                        break
+            if not click_enabled:
                 continue
             for dch in cm.get(col["uid"], []):
                 popup_sp = dch.get("stepParams", {}).get("popupSettings", {}).get("openView", {})
                 popup_uid = popup_sp.get("uid")
                 mode = popup_sp.get("mode", "drawer")
                 size = popup_sp.get("size", "?")
+                tpl_uid = popup_sp.get("popupTemplateUid", "")
                 if popup_uid:
-                    return self._describe_popup(popup_uid, cm, mode, size)
+                    if popup_uid in visited:
+                        return f"(cycle: {popup_uid} already visited)"
+                    visited.add(popup_uid)
+                    # If popup uses a template, resolve the template target
+                    if tpl_uid:
+                        target_uid = self._resolve_template_target(tpl_uid)
+                        if target_uid and target_uid not in visited:
+                            visited.add(target_uid)
+                            return self._describe_popup(target_uid, cm, mode, size, visited)
+                    # Normal popup (content is direct children)
+                    return self._describe_popup(popup_uid, cm, mode, size, visited)
         return None
 
-    def _describe_popup(self, popup_uid, cm, mode, size):
-        """Describe a detail popup's tab structure as DSL."""
+    def _describe_popup(self, popup_uid, cm, mode, size, visited=None):
+        """Describe a detail popup's tab structure as DSL.
+
+        Resolves references and templates one level deep.
+        Uses visited set for cycle detection (graph nodes).
+        The popup_uid may point to a ChildPageModel directly, or to a
+        DisplayTextFieldModel (template target) which wraps a ChildPageModel.
+        """
+        if visited is None:
+            visited = set()
         children = cm.get(popup_uid, [])
         tabs = [c for c in children if "ChildPageTab" in c.get("use", "")]
+        if not tabs:
+            # Template targets may be DisplayTextFieldModel → ChildPageModel → tabs
+            for ch in children:
+                if "ChildPage" in ch.get("use", "") and "Tab" not in ch.get("use", ""):
+                    tabs = [t for t in cm.get(ch["uid"], []) if "ChildPageTab" in t.get("use", "")]
+                    if tabs:
+                        break
         if not tabs:
             return f"({mode},{size}) empty"
         lines = [f"mode={mode}, size={size}"]
@@ -452,26 +736,234 @@ class PageTool:
             tab_blocks = []
             for tc in tab_children:
                 if "BlockGrid" in tc.get("use", ""):
-                    for bc in cm.get(tc["uid"], []):
-                        bu = bc.get("use", "")
-                        if "Details" in bu:
-                            dsl = self._form_to_dsl(bc, cm)
-                            tab_blocks.append(f"Details:\n{dsl}")
-                        elif "Table" in bu:
-                            coll = bc.get("stepParams", {}).get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
-                            sub_cols = []
-                            for sc in sorted(cm.get(bc["uid"], []), key=lambda m: m.get("sortIndex", 0)):
-                                fp = sc.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
-                                if fp:
-                                    sub_cols.append(fp)
-                            tab_blocks.append(f"SubTable {coll}: {json.dumps(sub_cols)}")
-                        elif "JS" in bu:
-                            tab_blocks.append("JSBlock")
+                    gs = tc.get("stepParams", {}).get("gridSettings", {}).get("grid", {})
+                    grid_rows = gs.get("rows", {})
+                    grid_sizes = gs.get("sizes", {})
+                    # Show layout if multi-column
+                    if grid_rows:
+                        for rid, cols in grid_rows.items():
+                            sz = grid_sizes.get(rid, [24] * len(cols))
+                            if len(cols) > 1 or (len(sz) > 1 and any(s != 24 for s in sz)):
+                                tab_blocks.append(f"Layout: {sz}")
+                                break
+                    for bc in sorted(cm.get(tc["uid"], []), key=lambda m: m.get("sortIndex", 0)):
+                        self._describe_block(bc, cm, tab_blocks, visited)
             content = "\n".join(tab_blocks) if tab_blocks else "(empty)"
             lines.append(f'Tab "{tab_title}":')
             for cl in content.split("\n"):
                 lines.append(f"  {cl}")
         return "\n".join(lines)
+
+    def _describe_block(self, bc, cm, tab_blocks, visited):
+        """Describe a single block within a popup tab. Handles all block types."""
+        bu = bc.get("use", "")
+        sp = bc.get("stepParams", {})
+        uid_ = bc["uid"]
+
+        if "Details" in bu and "Item" not in bu:
+            dsl = self._form_to_dsl(bc, cm)
+            # Count JSItem children for richer output
+            js_items = [c for c in self._all_descendants(uid_, cm) if "JSItem" in c.get("use", "")]
+            # Count action buttons
+            actions = [c for c in cm.get(uid_, []) if "Action" in c.get("use", "")]
+            extras = []
+            if js_items:
+                extras.append(f"{len(js_items)} JSItem")
+            if actions:
+                act_names = [a.get("use", "").replace("Model", "").replace("Action", "") for a in actions]
+                extras.append(f"actions=[{','.join(act_names)}]")
+            suffix = f"  ({', '.join(extras)})" if extras else ""
+            tab_blocks.append(f"Details:{suffix}\n{dsl}")
+
+        elif "Table" in bu and "Column" not in bu and "Actions" not in bu:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            sub_cols = []
+            js_sub_cols = []
+            for sc in sorted(cm.get(uid_, []), key=lambda m: m.get("sortIndex", 0)):
+                scu = sc.get("use", "")
+                if "JSColumn" in scu:
+                    ct = sc.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
+                    js_sub_cols.append(ct)
+                elif "TableColumn" in scu and "Actions" not in scu:
+                    fp = sc.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+                    if fp:
+                        sub_cols.append(fp)
+            line = f"SubTable {coll}: {json.dumps(sub_cols)}"
+            if js_sub_cols:
+                line += f" js={json.dumps(js_sub_cols)}"
+            tab_blocks.append(line)
+
+        elif "JSBlock" in bu:
+            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            code = (sp.get("jsSettings") or {}).get("runJs", {}).get("code", "")
+            t = f'"{title}"' if title else "(untitled)"
+            tab_blocks.append(f"JSBlock {t} [JS {len(code)}c]")
+
+        elif "ActionPanel" in bu:
+            actions = sorted(cm.get(uid_, []), key=lambda m: m.get("sortIndex", 0))
+            act_descs = []
+            for act in actions:
+                au = act.get("use", "")
+                asp = act.get("stepParams", {})
+                if "Popup" in au:
+                    ps = asp.get("popupSettings", {}).get("openView", {})
+                    act_descs.append(f"Popup({ps.get('mode', '')},{ps.get('collectionName', '')})")
+                elif "Link" in au:
+                    lt = asp.get("linkActionSettings", {}).get("general", {}).get("title", "")
+                    act_descs.append(f'Link("{lt}")' if lt else "Link")
+                else:
+                    act_descs.append(au.replace("Model", ""))
+            tab_blocks.append(f"ActionPanel: [{', '.join(act_descs)}]")
+
+        elif "Reference" in bu:
+            rs = sp.get("referenceSettings", {})
+            tpl_name = rs.get("useTemplate", {}).get("templateName", "")
+            target_uid = rs.get("target", {}).get("targetUid", "") or rs.get("useTemplate", {}).get("targetUid", "")
+            if target_uid and target_uid not in visited:
+                visited.add(target_uid)
+                tab_blocks.append(f'Reference: "{tpl_name}"')
+                # Resolve one level
+                ref_lines = []
+                self._inspect_resolved_ref(target_uid, cm, ref_lines, visited, indent=2)
+                tab_blocks.extend(ref_lines)
+            elif target_uid:
+                tab_blocks.append(f'Reference: "{tpl_name}" (cycle, skip)')
+            else:
+                tab_blocks.append(f'Reference: "{tpl_name}"')
+
+        elif "Form" in bu and "Filter" not in bu:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            dsl = self._form_to_dsl(bc, cm)
+            tab_blocks.append(f"Form ({coll}):\n{dsl}")
+
+    def _all_descendants(self, uid_, cm):
+        """Get all descendant models (flat list) for counting."""
+        result = []
+        stack = list(cm.get(uid_, []))
+        while stack:
+            m = stack.pop()
+            result.append(m)
+            stack.extend(cm.get(m["uid"], []))
+        return result
+
+    def inspect_compact(self, page_title):
+        """Generate a one-line summary of a page's structure."""
+        tab_uid = self._find_tab_uid(page_title)
+        if not tab_uid:
+            return f"{page_title}  (not found)"
+        cm = self._children_map()
+        tree = self._build_tree(tab_uid, cm)
+        return self._compact_summary(page_title, tree, cm)
+
+    def _compact_summary(self, page_title, tree, cm):
+        """Generate one-line compact summary: KPI:N Filter:Nf Table(coll):Nc+Njs AddNew:Nf Edit:Nf Detail:Ntabs"""
+        grids = [c for c in tree.get("children", []) if "BlockGrid" in c.get("use", "")]
+        if not grids:
+            return f"{page_title}  (empty)"
+        grid = grids[0]
+        gs = grid.get("stepParams", {}).get("gridSettings", {}).get("grid", {})
+        rows = gs.get("rows", {})
+        block_map = {c["uid"]: c for c in grid.get("children", [])}
+
+        JS_KPI_THRESHOLD = 1000
+        kpi_count = 0
+        chart_count = 0
+        filter_fields = 0
+        tables = []  # list of table summary strings
+        ai_shortcuts = False
+
+        for row_id, cols in rows.items():
+            for col_uids in cols:
+                for buid in col_uids:
+                    node = block_map.get(buid)
+                    if not node:
+                        continue
+                    use = node.get("use", "")
+                    if "JSBlock" in use:
+                        sp = node.get("stepParams", {})
+                        code = (sp.get("jsSettings") or {}).get("runJs", {}).get("code", "")
+                        if len(code) > JS_KPI_THRESHOLD:
+                            chart_count += 1
+                        else:
+                            kpi_count += 1
+                    elif "FilterForm" in use:
+                        ff_children = self._extract_filter_fields(node, cm)
+                        filter_fields = len(ff_children)
+                    elif "TableBlock" in use:
+                        tables.append(self._compact_table(node, cm))
+
+        # AI shortcuts
+        shortcuts = [c for c in tree.get("children", []) if "AIEmployeeShortcut" in c.get("use", "")]
+        if shortcuts:
+            ai_shortcuts = True
+
+        parts = [page_title]
+        if kpi_count:
+            parts.append(f"KPI:{kpi_count}")
+        if chart_count:
+            parts.append(f"Chart:{chart_count}")
+        if filter_fields:
+            parts.append(f"Filter:{filter_fields}f")
+        for t in tables:
+            parts.append(t)
+        if ai_shortcuts:
+            parts.append("AI")
+        return "  ".join(parts)
+
+    def _compact_table(self, table_block, cm):
+        """Generate compact table summary: Table(coll):Nc+Njs AddNew:Nf Edit:Nf Detail:Ntabs"""
+        sp = table_block.get("stepParams", {})
+        coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+        col_children = sorted(cm.get(table_block["uid"], []), key=lambda m: m.get("sortIndex", 0))
+
+        plain_count = 0
+        js_count = 0
+        addnew_fields = 0
+        edit_fields = 0
+        detail_tabs = 0
+
+        for ch in col_children:
+            ch_use = ch.get("use", "")
+            if "JSColumn" in ch_use:
+                js_count += 1
+            elif "TableColumn" in ch_use and "Actions" not in ch_use:
+                plain_count += 1
+            elif "AddNew" in ch_use:
+                addnew_fields = self._count_form_fields(ch, cm)
+            elif "ActionsColumn" in ch_use or "TableActions" in ch_use:
+                for act in cm.get(ch["uid"], []):
+                    if "Edit" in act.get("use", ""):
+                        edit_fields = self._count_form_fields(act, cm)
+
+        # Count detail popup tabs
+        detail_info = self._find_detail_popup(col_children, cm, set())
+        if detail_info:
+            detail_tabs = detail_info.count('Tab "')
+
+        parts = []
+        col_str = f"{plain_count}c"
+        if js_count:
+            col_str += f"+{js_count}js"
+        parts.append(f"Table({coll}):{col_str}")
+        if addnew_fields:
+            parts.append(f"AddNew:{addnew_fields}f")
+        if edit_fields:
+            parts.append(f"Edit:{edit_fields}f")
+        if detail_tabs:
+            parts.append(f"Detail:{detail_tabs}tabs")
+        return " ".join(parts)
+
+    def _count_form_fields(self, action_node, cm):
+        """Count form fields inside an action node."""
+        count = 0
+        for desc in self._all_descendants(action_node["uid"], cm):
+            use = desc.get("use", "")
+            sp = desc.get("stepParams", {})
+            if "FormItem" in use or "EditItem" in use:
+                fp = sp.get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+                if fp:
+                    count += 1
+        return count
 
 
 def register_tools(mcp: FastMCP):
@@ -501,46 +993,66 @@ def register_tools(mcp: FastMCP):
         return text
 
     @mcp.tool()
-    def nb_inspect_page(page_title: str) -> str:
-        """Inspect a page and return a compact visual layout summary.
+    def nb_inspect_page(page_title: str, depth: int = 1) -> str:
+        """Inspect a page and return a visual layout summary.
 
-        Shows the actual rendered structure: rows, columns, KPIs, tables,
-        filters, forms, and detail popups in an easy-to-read format.
+        Shows the actual rendered structure: KPIs, tables, filters, forms,
+        detail popups, sort rules, popup modes, and hidden-point annotations
+        ([JS Nc], [N events], [N linkage]).
 
         Args:
             page_title: Page title as shown in the sidebar menu
+            depth: 0 = one-line compact summary, 1 = full structure (default)
 
         Returns:
-            Compact visual layout of the page structure.
+            Visual layout of the page structure.
 
         Example:
-            nb_inspect_page("客户列表")
-            nb_inspect_page("资产台账")
+            nb_inspect_page("资产台账")          # full structure
+            nb_inspect_page("资产台账", depth=0)  # one-line summary
         """
         nb = get_nb_client()
         pt = PageTool(nb)
+        if depth == 0:
+            return pt.inspect_compact(page_title)
         return pt.inspect(page_title)
 
     @mcp.tool()
-    def nb_inspect_all(prefix: Optional[str] = None) -> str:
-        """Inspect all pages and return a compact summary of each.
+    def nb_inspect_all(prefix: Optional[str] = None, depth: int = 0) -> str:
+        """Inspect all pages and return a summary.
 
         Args:
             prefix: Optional menu path prefix to filter (e.g. "CRM", "仓储管理")
+            depth: 0 = one-line-per-page compact (default), 1 = full structure
 
         Returns:
-            Compact inspection of all matching pages.
+            Compact or full inspection of all matching pages.
+
+        Example:
+            nb_inspect_all("CRM")            # compact overview (~1 line per page)
+            nb_inspect_all("CRM", depth=1)   # full structure of every page
         """
         nb = get_nb_client()
         pt = PageTool(nb)
         all_pages = pt.pages()
         if prefix:
             all_pages = [p for p in all_pages if p["path"].startswith(prefix)]
-        results = []
-        for page in all_pages:
-            results.append(pt.inspect(page["title"]))
-            results.append("")
-        return "\n".join(results) if results else "No pages found"
+        if not all_pages:
+            return "No pages found"
+
+        if depth == 0:
+            # Compact: one line per page
+            lines = [f"# {prefix or 'All'} ({len(all_pages)} pages)", ""]
+            for page in all_pages:
+                lines.append(pt.inspect_compact(page["title"]))
+            return "\n".join(lines)
+        else:
+            # Full: complete structure per page
+            results = []
+            for page in all_pages:
+                results.append(pt.inspect(page["title"]))
+                results.append("")
+            return "\n".join(results)
 
     @mcp.tool()
     def nb_locate_node(
@@ -753,6 +1265,111 @@ def register_tools(mcp: FastMCP):
         nb = get_nb_client()
         count = nb.destroy_tree(uid)
         return f"Removed column {uid} ({count} nodes deleted)"
+
+    @mcp.tool()
+    def nb_read_node(uid: str, include: str = "all") -> str:
+        """Read complete configuration of a FlowModel node for debugging.
+
+        Use this after nb_inspect_page or nb_show_page to drill into a
+        specific node's configuration: event flows, JS code, linkage rules,
+        field settings, etc.
+
+        Args:
+            uid: FlowModel node UID (from nb_inspect_page, nb_show_page,
+                 or nb_locate_node)
+            include: What data to return:
+                - "all" — stepParams + flowRegistry (event flows)
+                - "events" — only flowRegistry with full JS code
+                - "js" — only jsSettings code
+                - "linkage" — only buttonSettings.linkageRules
+                - "params" — only stepParams keys summary
+
+        Returns:
+            JSON with the requested configuration data.
+
+        Example:
+            nb_read_node("abc123")                    # full config
+            nb_read_node("form_uid", "events")        # see event flow code
+            nb_read_node("js_col_uid", "js")          # see JS column code
+            nb_read_node("button_uid", "linkage")     # see linkage rules
+        """
+        nb = get_nb_client()
+        try:
+            data = nb._get_json(f"api/flowModels:get?filterByTk={uid}")
+        except Exception:
+            return f"Node {uid} not found"
+        if not data:
+            return f"Node {uid} not found"
+
+        sp = data.get("stepParams", {}) or {}
+        fr = data.get("flowRegistry", {}) or {}
+        result = {"uid": uid, "use": data.get("use", "?")}
+
+        if include == "events":
+            events = []
+            for k, v in fr.items():
+                if not v:
+                    continue
+                evt = {
+                    "key": k,
+                    "event": v.get("on", {}).get("eventName", "?"),
+                    "title": v.get("title", ""),
+                }
+                for sk, sv in v.get("steps", {}).items():
+                    evt["code"] = sv.get("defaultParams", {}).get("code", "")
+                events.append(evt)
+            result["events"] = events
+            if not events:
+                result["note"] = "No event flows on this node"
+
+        elif include == "js":
+            js = sp.get("jsSettings", {}) or {}
+            code = js.get("runJs", {}).get("code", "")
+            result["code"] = code
+            result["code_length"] = len(code)
+            if not code:
+                result["note"] = "No JS code on this node"
+
+        elif include == "linkage":
+            bs = sp.get("buttonSettings", {})
+            lr = bs.get("linkageRules", {}).get("value", [])
+            result["linkageRules"] = lr
+            result["buttonTitle"] = bs.get("general", {}).get("title", "")
+            if not lr:
+                result["note"] = "No linkage rules on this node"
+
+        elif include == "params":
+            result["stepParams_keys"] = list(sp.keys())
+            summary = {}
+            for k, v in sp.items():
+                if isinstance(v, dict) and len(json.dumps(v)) < 200:
+                    summary[k] = v
+                elif isinstance(v, dict):
+                    summary[k] = f"({len(json.dumps(v))} chars)"
+                else:
+                    summary[k] = v
+            result["stepParams_summary"] = summary
+            has_events = any(fr.values()) if fr else False
+            result["has_events"] = has_events
+
+        else:  # "all"
+            result["stepParams"] = sp
+            events = []
+            for k, v in fr.items():
+                if not v:
+                    continue
+                evt = {
+                    "key": k,
+                    "event": v.get("on", {}).get("eventName", "?"),
+                }
+                for sk, sv in v.get("steps", {}).items():
+                    code = sv.get("defaultParams", {}).get("code", "")
+                    evt["code"] = code[:500] + "..." if len(code) > 500 else code
+                events.append(evt)
+            if events:
+                result["events"] = events
+
+        return json.dumps(result, ensure_ascii=False, indent=2)
 
     @mcp.tool()
     def nb_list_pages() -> str:
