@@ -177,6 +177,236 @@ class PageTool:
             for child in rt.get("children", []):
                 self._collect_pages([child], result, path)
 
+    # ── Page Inspect ──────────────────────────────────────────────
+
+    def inspect(self, page_title):
+        """Generate a compact visual representation of a page's structure."""
+        tab_uid = self._find_tab_uid(page_title)
+        if not tab_uid:
+            return f"Page '{page_title}' not found"
+        cm = self._children_map()
+        tree = self._build_tree(tab_uid, cm)
+        lines = [f"[{page_title}] tab={tab_uid}"]
+        # Find the BlockGridModel
+        grids = [c for c in tree.get("children", []) if "BlockGrid" in c.get("use", "")]
+        if not grids:
+            lines.append("  (empty page — no BlockGridModel)")
+            return "\n".join(lines)
+        grid = grids[0]
+        gs = grid.get("stepParams", {}).get("gridSettings", {}).get("grid", {})
+        rows = gs.get("rows", {})
+        sizes = gs.get("sizes", {})
+        # Map uid → child node for quick lookup
+        block_map = {c["uid"]: c for c in grid.get("children", [])}
+        # Build row display
+        row_items = sorted(rows.items(), key=lambda kv: list(rows.keys()).index(kv[0]))
+        for ri, (row_id, cols) in enumerate(row_items):
+            row_sizes = sizes.get(row_id, [24] * len(cols))
+            is_last = ri == len(row_items) - 1
+            prefix = "└─" if is_last else "├─"
+            size_str = "|".join(str(s) for s in row_sizes)
+            # Collect block descriptions for this row
+            col_descs = []
+            sub_lines = []  # extra lines for table details
+            for ci, col_uids in enumerate(cols):
+                for buid in col_uids:
+                    node = block_map.get(buid)
+                    if not node:
+                        col_descs.append(f"[? {buid[:8]}]")
+                        continue
+                    desc, extras = self._describe_block(node, cm)
+                    col_descs.append(desc)
+                    sub_lines.extend(extras)
+            blocks_str = " ".join(col_descs)
+            lines.append(f"  {prefix} ROW {ri+1} ({size_str}): {blocks_str}")
+            # Sub-lines (table details) indented under the row
+            pad = "  │  " if not is_last else "     "
+            for sl in sub_lines:
+                lines.append(f"  {pad}  {sl}")
+        # Check for AI shortcuts
+        shortcuts = [c for c in tree.get("children", [])
+                     if "AIEmployeeShortcut" in c.get("use", "")]
+        if shortcuts:
+            names = []
+            for sc in shortcuts:
+                for ch in sc.get("children", []):
+                    sp = ch.get("stepParams", {})
+                    un = sp.get("aiEmployeeShortcutSettings", {}).get("init", {}).get("aiEmployee", "")
+                    if un:
+                        names.append(un)
+            if names:
+                lines.append(f"  🤖 AI Shortcuts: {', '.join(names)}")
+        return "\n".join(lines)
+
+    def _describe_block(self, node, cm):
+        """Return (short_desc, [extra_lines]) for a block node."""
+        use = node.get("use", "")
+        sp = node.get("stepParams", {})
+        children = sorted(cm.get(node["uid"], []), key=lambda m: m.get("sortIndex", 0))
+        extras = []
+
+        if "TableBlock" in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            # Get column names
+            col_children = sorted(cm.get(node["uid"], []), key=lambda m: m.get("sortIndex", 0))
+            col_names = []
+            addnew_info = edit_info = detail_info = None
+            for ch in col_children:
+                ch_use = ch.get("use", "")
+                if "TableColumn" in ch_use and "Actions" not in ch_use:
+                    fp = ch.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+                    if fp:
+                        col_names.append(fp)
+                    else:
+                        ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
+                        col_names.append(f"[JS:{ct}]" if "JS" in ch_use else ct or "?")
+                elif "JSColumn" in ch_use:
+                    ct = ch.get("stepParams", {}).get("tableColumnSettings", {}).get("title", {}).get("title", "")
+                    col_names.append(f"[JS:{ct}]")
+                elif "AddNew" in ch_use:
+                    addnew_info = self._describe_action(ch, cm)
+                elif "ActionsColumn" in ch_use or "TableActions" in ch_use:
+                    # Look inside for EditAction and detail popup
+                    for act in sorted(cm.get(ch["uid"], []), key=lambda m: m.get("sortIndex", 0)):
+                        if "Edit" in act.get("use", ""):
+                            edit_info = self._describe_action(act, cm)
+                elif "Filter" in ch_use:
+                    pass  # handled separately
+            cols_str = ",".join(col_names[:8])
+            if len(col_names) > 8:
+                cols_str += f"...+{len(col_names)-8}"
+            title_str = f' "{title}"' if title else ""
+            desc = f"[Table{title_str} {coll}: {cols_str}]"
+            # Check for detail popup on first column
+            detail_info = self._find_detail_popup(col_children, cm)
+            if addnew_info:
+                extras.append(f"├─ AddNew: {addnew_info}")
+            if edit_info:
+                extras.append(f"├─ Edit: {edit_info}")
+            if detail_info:
+                extras.append(f"└─ Detail: {detail_info}")
+            return desc, extras
+
+        if "JSBlock" in use:
+            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            return f'[KPI "{title}"]', []
+
+        if "FilterForm" in use:
+            # Get filter field names
+            filter_children = sorted(cm.get(node["uid"], []), key=lambda m: m.get("sortIndex", 0))
+            field_names = []
+            target = None
+            for fc in filter_children:
+                for ffc in sorted(cm.get(fc["uid"], []), key=lambda m: m.get("sortIndex", 0)):
+                    fsp = ffc.get("stepParams", {})
+                    ffis = fsp.get("filterFormItemSettings", {}).get("init", {})
+                    fn = ffis.get("filterField", {}).get("name", "")
+                    if fn:
+                        field_names.append(fn)
+                    if not target:
+                        target = ffis.get("defaultTargetUid", "")
+            fields_str = ",".join(field_names) if field_names else "?"
+            return f"[Filter: {fields_str}]", []
+
+        if "Details" in use and "Item" not in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            return f"[Details {coll}]", []
+
+        # Generic fallback
+        short_use = use.replace("Model", "")
+        return f"[{short_use}]", []
+
+    def _describe_action(self, action_node, cm):
+        """Describe an AddNew/Edit action's form fields."""
+        # Traverse: Action → ChildPage → ChildPageTab → BlockGrid → Form → FormGrid → FormItems
+        children = cm.get(action_node["uid"], [])
+        for ch in children:
+            if "ChildPage" in ch.get("use", ""):
+                return self._describe_form_tree(ch, cm)
+        return "?"
+
+    def _describe_form_tree(self, node, cm):
+        """Walk a ChildPage/Form tree and count fields."""
+        children = cm.get(node["uid"], [])
+        for ch in children:
+            use = ch.get("use", "")
+            if "Form" in use and "Grid" not in use and "Item" not in use and "Filter" not in use:
+                # Found the form — count its items
+                return self._count_form_fields(ch, cm)
+            result = self._describe_form_tree(ch, cm)
+            if result != "?":
+                return result
+        return "?"
+
+    def _count_form_fields(self, form_node, cm):
+        """Count FormItemModel and DividerItemModel in a form."""
+        # Form → FormGrid → Items
+        children = cm.get(form_node["uid"], [])
+        for ch in children:
+            if "FormGrid" in ch.get("use", "") or "DetailsGrid" in ch.get("use", ""):
+                items = cm.get(ch["uid"], [])
+                fields = [i for i in items if "FormItem" in i.get("use", "") or "DetailsItem" in i.get("use", "")]
+                dividers = [i for i in items if "Divider" in i.get("use", "")]
+                field_names = []
+                for f in sorted(fields, key=lambda x: x.get("sortIndex", 0))[:5]:
+                    fp = f.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+                    if fp:
+                        field_names.append(fp)
+                preview = ", ".join(field_names)
+                if len(fields) > 5:
+                    preview += f", ...+{len(fields)-5}"
+                div_str = f", {len(dividers)} dividers" if dividers else ""
+                return f"{len(fields)} fields{div_str} ({preview})"
+        return "?"
+
+    def _find_detail_popup(self, col_children, cm):
+        """Find detail popup attached to click-to-open column."""
+        for col in col_children:
+            if "TableColumn" not in col.get("use", "") or "Actions" in col.get("use", ""):
+                continue
+            dfs = col.get("stepParams", {}).get("displayFieldSettings", {})
+            if not dfs.get("clickToOpen", {}).get("clickToOpen"):
+                continue
+            # Found click-to-open column — look for its display field's popup
+            for dch in cm.get(col["uid"], []):
+                popup_sp = dch.get("stepParams", {}).get("popupSettings", {}).get("openView", {})
+                popup_uid = popup_sp.get("uid")
+                mode = popup_sp.get("mode", "drawer")
+                size = popup_sp.get("size", "?")
+                if popup_uid:
+                    return self._describe_popup(popup_uid, cm, mode, size)
+        return None
+
+    def _describe_popup(self, popup_uid, cm, mode, size):
+        """Describe a detail popup's tab structure."""
+        children = cm.get(popup_uid, [])
+        tabs = [c for c in children if "ChildPageTab" in c.get("use", "")]
+        if not tabs:
+            return f"({mode},{size}) empty"
+        tab_descs = []
+        for tab in sorted(tabs, key=lambda t: t.get("sortIndex", 0)):
+            tab_title = tab.get("stepParams", {}).get("pageTabSettings", {}).get("tab", {}).get("title", "?")
+            # Look inside for block types
+            tab_children = cm.get(tab["uid"], [])
+            block_types = []
+            for tc in tab_children:
+                if "BlockGrid" in tc.get("use", ""):
+                    for bc in cm.get(tc["uid"], []):
+                        bu = bc.get("use", "")
+                        if "Details" in bu:
+                            n = len([i for i in cm.get(bc["uid"], [])
+                                     if "Grid" in i.get("use", "")])
+                            block_types.append("Details")
+                        elif "Table" in bu:
+                            coll = bc.get("stepParams", {}).get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+                            block_types.append(f"SubTable:{coll}")
+                        elif "JS" in bu:
+                            block_types.append("JS")
+            content = ", ".join(block_types) if block_types else "empty"
+            tab_descs.append(f'"{tab_title}"({content})')
+        return f"({mode},{size}) [{' | '.join(tab_descs)}]"
+
 
 def register_tools(mcp: FastMCP):
     """Register page maintenance tools on the MCP server."""
@@ -203,6 +433,48 @@ def register_tools(mcp: FastMCP):
         if tree is None:
             return text
         return text
+
+    @mcp.tool()
+    def nb_inspect_page(page_title: str) -> str:
+        """Inspect a page and return a compact visual layout summary.
+
+        Shows the actual rendered structure: rows, columns, KPIs, tables,
+        filters, forms, and detail popups in an easy-to-read format.
+
+        Args:
+            page_title: Page title as shown in the sidebar menu
+
+        Returns:
+            Compact visual layout of the page structure.
+
+        Example:
+            nb_inspect_page("客户列表")
+            nb_inspect_page("资产台账")
+        """
+        nb = get_nb_client()
+        pt = PageTool(nb)
+        return pt.inspect(page_title)
+
+    @mcp.tool()
+    def nb_inspect_all(prefix: Optional[str] = None) -> str:
+        """Inspect all pages and return a compact summary of each.
+
+        Args:
+            prefix: Optional menu path prefix to filter (e.g. "CRM", "仓储管理")
+
+        Returns:
+            Compact inspection of all matching pages.
+        """
+        nb = get_nb_client()
+        pt = PageTool(nb)
+        all_pages = pt.pages()
+        if prefix:
+            all_pages = [p for p in all_pages if p["path"].startswith(prefix)]
+        results = []
+        for page in all_pages:
+            results.append(pt.inspect(page["title"]))
+            results.append("")
+        return "\n".join(results) if results else "No pages found"
 
     @mcp.tool()
     def nb_locate_node(

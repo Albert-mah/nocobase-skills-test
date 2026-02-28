@@ -246,6 +246,8 @@ def _normalize_fields(fields):
         3. Mixed: list items also support pipe syntax
     """
     if isinstance(fields, str):
+        # MCP JSON transport may deliver literal \n (two chars) instead of real newlines
+        fields = fields.replace("\\n", "\n")
         fields = [l.strip() for l in fields.strip().split("\n") if l.strip()]
 
     result = []
