@@ -6,6 +6,7 @@ Extracted from nb-setup.py.
 import json
 import os
 import subprocess
+import time
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -16,6 +17,10 @@ from ..client import (
 )
 from ..utils import safe_json
 from .fields import _build_field_update
+
+# Debounce global syncFields — avoid repeated slow full-scan calls
+_last_global_sync = 0.0
+_SYNC_DEBOUNCE_SECS = 30
 
 
 def _ensure_system_columns(table_name: str) -> str:
@@ -54,6 +59,20 @@ def _ensure_system_columns(table_name: str) -> str:
         return f"ERROR: {e}"
 
 
+def _global_sync(client) -> str:
+    """Run mainDataSource:syncFields with debounce (skip if called within 30s)."""
+    global _last_global_sync
+    now = time.time()
+    if now - _last_global_sync < _SYNC_DEBOUNCE_SECS:
+        return "skipped (recent)"
+    try:
+        client.post("/api/mainDataSource:syncFields", expect_empty=True)
+        _last_global_sync = time.time()
+        return "OK"
+    except APIError as e:
+        return f"ERROR: {e}"
+
+
 def register_tools(mcp: FastMCP):
     """Register collection management tools on the MCP server."""
 
@@ -61,12 +80,14 @@ def register_tools(mcp: FastMCP):
     def nb_execute_sql(sql: str, db_url: Optional[str] = None) -> str:
         """Execute SQL against the NocoBase PostgreSQL database.
 
-        Uses psql command-line tool. For bulk DDL (CREATE TABLE, ALTER TABLE),
-        this is faster and more reliable than API calls.
-
         **Auto system columns**: When CREATE TABLE statements are detected,
         automatically adds createdAt/updatedAt/createdById/updatedById columns
         to each created table. You do NOT need to include these in your DDL.
+
+        **Best practices for large data**:
+        - Split INSERT statements into separate calls (one table per call)
+        - Keep each call under ~20 rows to avoid timeouts
+        - Or write SQL to a local file first, then use nb_execute_sql_file()
 
         Args:
             sql: SQL statement(s) to execute. Multiple statements separated by semicolons.
@@ -148,6 +169,41 @@ def register_tools(mcp: FastMCP):
             return "ERROR: SQL execution timed out (30s limit)"
 
     @mcp.tool()
+    def nb_execute_sql_file(file_path: str, db_url: Optional[str] = None) -> str:
+        """Execute SQL from a local file against the NocoBase PostgreSQL database.
+
+        Use this for large SQL scripts (bulk INSERT, complex DDL). Write the SQL
+        to a local file first, then execute it here — avoids token/timeout limits.
+
+        Same auto-system-columns behavior as nb_execute_sql.
+
+        Args:
+            file_path: Absolute path to a .sql file
+            db_url: PostgreSQL connection URL. Default: postgresql://nocobase:nocobase@localhost:5435/nocobase
+
+        Returns:
+            Execution result or error message.
+
+        Example:
+            nb_execute_sql_file("/tmp/build-crm/seed-data.sql")
+        """
+        import re
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                sql = f.read()
+        except FileNotFoundError:
+            return f"ERROR: File not found: {file_path}"
+        except Exception as e:
+            return f"ERROR reading file: {e}"
+
+        if not sql.strip():
+            return "ERROR: File is empty"
+
+        result = nb_execute_sql(sql, db_url=db_url)
+
+        return f"[file: {file_path}] {result}"
+
+    @mcp.tool()
     def nb_register_collection(name: str, title: str, tree: Optional[str] = None) -> str:
         """Register an existing database table as a NocoBase collection.
 
@@ -208,12 +264,14 @@ def register_tools(mcp: FastMCP):
             if col_result != "OK":
                 results.append(f"System columns: {col_result}")
 
-        # Global sync (DB → NocoBase metadata)
-        try:
-            client.post("/api/mainDataSource:syncFields", expect_empty=True)
+        # Global sync (DB → NocoBase metadata) — debounced to avoid repeated slow calls
+        sync_result = _global_sync(client)
+        if sync_result == "OK":
             results.append("Fields synced successfully")
-        except APIError as e:
-            results.append(f"Sync error: {e}")
+        elif sync_result == "skipped (recent)":
+            results.append("Fields sync skipped (synced <30s ago)")
+        else:
+            results.append(f"Sync error: {sync_result}")
 
         # Create system field metadata via API
         if collection:
@@ -260,6 +318,9 @@ def register_tools(mcp: FastMCP):
         tree: Optional[str] = None,
     ) -> str:
         """Register a collection, sync fields, upgrade interfaces, and create relations — all in one call.
+
+        **Idempotent**: safe to call multiple times. If collection already exists, it continues
+        with sync + upgrade + relations. Always call this for EVERY table, even if previously registered.
 
         Combines nb_register_collection + nb_sync_fields + nb_upgrade_field (batch) + nb_create_relation (batch).
         Use this instead of calling those tools individually for each table.
@@ -323,11 +384,10 @@ def register_tools(mcp: FastMCP):
         if col_result != "OK":
             results.append(f"[system-cols] {col_result}")
 
-        # 2b: Sync DB → NocoBase metadata
-        try:
-            client.post("/api/mainDataSource:syncFields", expect_empty=True)
-        except APIError:
-            pass
+        # 2b: Sync DB → NocoBase metadata (debounced — skips if called within 30s)
+        sync_result = _global_sync(client)
+        if sync_result != "OK" and sync_result != "skipped (recent)":
+            results.append(f"[sync-warn] {sync_result}")
 
         # 2c: Create system field metadata via API (for proper ORM mapping)
         try:
@@ -486,3 +546,80 @@ def register_tools(mcp: FastMCP):
             return "\n".join(lines)
         except APIError as e:
             return f"ERROR: {e}"
+
+    @mcp.tool()
+    def nb_clean_prefix(prefix: str) -> str:
+        """Delete all collections and database tables matching a name prefix.
+
+        Cleans up both NocoBase metadata (via API) and database tables (via SQL).
+        Use this before rebuilding a module from scratch.
+
+        Args:
+            prefix: Table/collection name prefix, e.g. "nb_itsm_" or "nb_crm_"
+
+        Returns:
+            Summary of deleted collections and dropped tables.
+
+        Example:
+            nb_clean_prefix("nb_itsm_")
+        """
+        client = get_stdlib_client()
+        results = []
+
+        # Step 1: Delete collections via API (cleans metadata + may drop tables)
+        try:
+            resp = client.get("/api/collections:list?paginate=false")
+            collections = [c for c in resp.get("data", []) if c["name"].startswith(prefix)]
+            deleted = 0
+            for c in collections:
+                try:
+                    client.post(f"/api/collections:destroy?filterByTk={c['name']}")
+                    deleted += 1
+                except APIError:
+                    pass
+            results.append(f"[collections] {deleted}/{len(collections)} deleted via API")
+        except APIError as e:
+            results.append(f"[collections] ERROR: {e}")
+
+        # Step 2: Drop any remaining tables via SQL (catches tables not registered as collections)
+        db_url = os.environ.get("NB_DB_URL", "postgresql://nocobase:nocobase@localhost:5435/nocobase")
+        try:
+            import psycopg2
+            with psycopg2.connect(db_url) as conn:
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'public' AND table_name LIKE %s
+                        ORDER BY table_name
+                    """, (prefix + '%',))
+                    tables = [r[0] for r in cur.fetchall()]
+                    dropped = 0
+                    for tbl in tables:
+                        try:
+                            cur.execute(f'DROP TABLE IF EXISTS "{tbl}" CASCADE')
+                            dropped += 1
+                        except Exception:
+                            pass
+                    results.append(f"[tables] {dropped}/{len(tables)} dropped via SQL")
+        except ImportError:
+            try:
+                find_sql = f"SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE '{prefix}%'"
+                proc = subprocess.run(
+                    ["psql", db_url, "-t", "-c", find_sql],
+                    capture_output=True, text=True, timeout=10,
+                )
+                tables = [t.strip() for t in proc.stdout.strip().split("\n") if t.strip()]
+                if tables:
+                    drop_sql = "; ".join(f'DROP TABLE IF EXISTS "{t}" CASCADE' for t in tables)
+                    subprocess.run(["psql", db_url, "-c", drop_sql], capture_output=True, timeout=10)
+                results.append(f"[tables] {len(tables)} dropped via SQL")
+            except Exception as e:
+                results.append(f"[tables] ERROR: {e}")
+        except Exception as e:
+            results.append(f"[tables] ERROR: {e}")
+
+        # Step 3: Clean routes/menus that reference these collections
+        # (Routes don't have collection references, so agents handle this separately)
+
+        return f"Clean '{prefix}': " + " | ".join(results)
