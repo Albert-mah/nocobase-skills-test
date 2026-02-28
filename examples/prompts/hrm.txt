@@ -1,0 +1,86 @@
+# Build HRM System in NocoBase
+
+Your table prefix is nb_hr_. Don't touch other prefixes (nb_am_, nb_tts_, nb_cbo_).
+
+Write all progress, issues, and results to ./notes.md.
+
+## Data Model (14 tables, prefix: nb_hr_)
+
+### M1: 组织与人员 (4 tables)
+
+**nb_hr_departments** — name* VARCHAR(255), code VARCHAR(50), parent_dept VARCHAR(100), manager VARCHAR(100), level INTEGER DEFAULT 1, status(select:正常/停用, colors:green/red), phone VARCHAR, address TEXT, remark TEXT
+
+**nb_hr_positions** — name* VARCHAR(255), code VARCHAR(50), department_id→nb_hr_departments(m2o), level(select:高层/中层/基层, colors:red/orange/blue), min_salary/max_salary NUMERIC(12,2), headcount INTEGER, status(select:招聘中/已满编/冻结, colors:blue/green/grey), requirements TEXT, remark TEXT
+
+**nb_hr_employees** — name* VARCHAR(100), employee_no* VARCHAR(50), gender(select:男/女), id_card VARCHAR(18), birth_date DATE, phone/email VARCHAR, address TEXT, department_id→nb_hr_departments(m2o), position_id→nb_hr_positions(m2o), hire_date DATE, contract_end DATE, status(select:在职/试用期/离职/休假, colors:green/blue/red/orange), education(select:博士/硕士/本科/大专/高中/其他), major VARCHAR, emergency_contact/emergency_phone VARCHAR, bank_name/bank_account VARCHAR, remark TEXT
+
+**nb_hr_contracts** — contract_no VARCHAR(50), employee_id→nb_hr_employees(m2o), contract_type(select:固定期限/无固定期限/实习/劳务), start_date/end_date DATE, salary NUMERIC(12,2), status(select:生效中/已到期/已终止, colors:green/orange/red), sign_date DATE, remark TEXT
+
+### M2: 考勤与假期 (3 tables)
+
+**nb_hr_attendance** — employee_id→nb_hr_employees(m2o), attendance_date DATE, check_in/check_out TIMESTAMPTZ, status(select:正常/迟到/早退/缺勤/外勤, colors:green/orange/orange/red/blue), work_hours NUMERIC(4,1), overtime_hours NUMERIC(4,1), remark TEXT
+
+**nb_hr_leaves** — employee_id→nb_hr_employees(m2o), leave_type(select:年假/事假/病假/婚假/产假/丧假/调休, colors:blue/default/orange/green/green/grey/cyan), start_date/end_date DATE, days NUMERIC(4,1), reason TEXT, status(select:待审批/已批准/已驳回/已取消, colors:orange/green/red/grey), approved_by VARCHAR, remark TEXT
+
+**nb_hr_overtime** — employee_id→nb_hr_employees(m2o), overtime_date DATE, start_time/end_time TIMESTAMPTZ, hours NUMERIC(4,1), overtime_type(select:工作日/休息日/节假日, colors:blue/orange/red), reason TEXT, status(select:待审批/已批准/已驳回, colors:orange/green/red), remark TEXT
+
+### M3: 薪酬 (2 tables)
+
+**nb_hr_salary_items** — name* VARCHAR(100), code VARCHAR(50), item_type(select:固定/浮动/扣除/补贴, colors:blue/orange/red/green), is_taxable BOOLEAN DEFAULT true, formula VARCHAR(500), sort_order INTEGER, status(select:启用/停用, colors:green/red), remark TEXT
+
+**nb_hr_payroll** — employee_id→nb_hr_employees(m2o), period VARCHAR(20), base_salary/allowance/bonus/deduction/social_insurance/tax/net_salary NUMERIC(12,2), status(select:草稿/已确认/已发放, colors:default/blue/green), pay_date DATE, remark TEXT
+
+### M4: 招聘 (3 tables)
+
+**nb_hr_recruitment** — title* VARCHAR(255), position_id→nb_hr_positions(m2o), department_id→nb_hr_departments(m2o), headcount INTEGER, salary_range VARCHAR, requirements TEXT, status(select:招聘中/已暂停/已关闭, colors:blue/orange/grey), publish_date/close_date DATE, channel(select:智联/BOSS/猎聘/内推/校招/其他), remark TEXT
+
+**nb_hr_candidates** — name* VARCHAR(100), phone/email VARCHAR, gender(select:男/女), education(select:博士/硕士/本科/大专/高中), school/major VARCHAR, work_years INTEGER, current_company/current_position VARCHAR, expected_salary NUMERIC(12,2), status(select:待筛选/面试中/已录用/已淘汰/已入职, colors:default/blue/green/red/cyan), source(select:智联/BOSS/猎聘/内推/校招/其他), resume_url VARCHAR, remark TEXT, recruitment_id→nb_hr_recruitment(m2o)
+
+**nb_hr_interviews** — candidate_id→nb_hr_candidates(m2o), round(select:初试/复试/终试/HR面), interview_date TIMESTAMPTZ, interviewer VARCHAR, location VARCHAR, result(select:通过/待定/不通过, colors:green/orange/red), score INTEGER, feedback TEXT, remark TEXT
+
+### M5: 培训 (2 tables)
+
+**nb_hr_trainings** — title* VARCHAR(255), category(select:入职培训/技能培训/管理培训/安全培训/其他), trainer VARCHAR, location VARCHAR, start_date/end_date DATE, max_participants INTEGER, status(select:计划中/进行中/已完成/已取消, colors:blue/orange/green/red), budget NUMERIC(12,2), actual_cost NUMERIC(12,2), description TEXT, remark TEXT
+
+**nb_hr_training_records** — employee_id→nb_hr_employees(m2o), training_id→nb_hr_trainings(m2o), attendance(select:已签到/未签到/请假, colors:green/red/orange), score NUMERIC(5,1), certificate VARCHAR, feedback TEXT, remark TEXT
+
+### Relations (o2m)
+departments←positions, departments←employees, departments←recruitment, positions←employees, positions←recruitment, employees←contracts, employees←attendance, employees←leaves, employees←overtime, employees←payroll, employees←training_records, employees←candidates(interviewer), recruitment←candidates, candidates←interviews, trainings←training_records
+
+## Pages (10 pages, "人力资源" group icon:teamoutlined)
+
+Menu: 人力资源 → 组织人事(sub,apartmentoutlined)[员工花名册/部门管理/岗位管理] + 考勤管理(sub,clockcircleoutlined OR fieldtimeoutlined)[考勤记录/请假管理/加班管理] + 薪酬福利(sub,dollarcircleoutlined OR dollaroutlined)[薪资发放/薪资项目] + 招聘培训(sub,solutionoutlined)[招聘管理/培训管理]
+
+1. 员工花名册 — KPIs(员工总数/在职/试用期/本月入职), cols(employee_no,name,department,position,phone,hire_date,status,createdAt), filter(name,department,status), form(--- 基本信息\nname*|employee_no*\ngender|birth_date\nid_card|education\nmajor\n--- 工作信息\ndepartment_id|position_id\nhire_date|contract_end\nstatus\n--- 联系方式\nphone|email\naddress\nemergency_contact|emergency_phone\n--- 财务信息\nbank_name|bank_account\nremark), detail(drawer,large):[员工详情, 合同 sub(contract_no,contract_type,start_date,end_date,status), 考勤 sub(attendance_date,check_in,check_out,status), 请假 sub(leave_type,start_date,end_date,days,status)]
+2. 部门管理 — cols(name,code,parent_dept,manager,level,status), filter(name,status), form(name*|code\nparent_dept|manager\nlevel|status\nphone\naddress\nremark)
+3. 岗位管理 — cols(name,code,department,level,headcount,min_salary,max_salary,status), filter(name,department,status), form(name*|code\ndepartment_id|level\nmin_salary|max_salary\nheadcount|status\nrequirements\nremark)
+4. 考勤记录 — cols(employee,attendance_date,check_in,check_out,status,work_hours,overtime_hours), filter(employee,status,attendance_date), form(employee_id|attendance_date\ncheck_in|check_out\nstatus\nwork_hours|overtime_hours\nremark)
+5. 请假管理 — KPIs(待审批/本月请假/年假使用/病假使用), cols(employee,leave_type,start_date,end_date,days,status,approved_by), filter(employee,leave_type,status), form(employee_id|leave_type\nstart_date|end_date\ndays\nreason\nstatus|approved_by\nremark)
+6. 加班管理 — cols(employee,overtime_date,start_time,end_time,hours,overtime_type,status), filter(employee,status), form(employee_id|overtime_date\nstart_time|end_time\nhours|overtime_type\nreason\nstatus\nremark)
+7. 薪资发放 — KPIs(本月发放/总金额/平均薪资/待确认), cols(employee,period,base_salary,allowance,bonus,deduction,tax,net_salary,status), filter(employee,period,status), form(employee_id|period\nbase_salary|allowance\nbonus|deduction\nsocial_insurance|tax\nnet_salary|pay_date\nstatus\nremark)
+8. 薪资项目 — cols(name,code,item_type,is_taxable,status,sort_order), form(name*|code\nitem_type|is_taxable\nformula\nstatus|sort_order\nremark)
+9. 招聘管理 — KPIs(招聘中/总候选人/已录用/已入职), cols(title,department,position,headcount,salary_range,status,publish_date), filter(title,department,status), form(title*|position_id\ndepartment_id|headcount\nsalary_range|channel\nstatus\npublish_date|close_date\nrequirements\nremark), detail(drawer,large):[招聘详情, 候选人 sub(name,phone,education,status,expected_salary)]
+10. 培训管理 — cols(title,category,trainer,start_date,end_date,max_participants,status,budget), filter(title,category,status), form(title*|category\ntrainer|location\nstart_date|end_date\nmax_participants|status\nbudget|actual_cost\ndescription\nremark), detail(drawer,large):[培训详情, 参训记录 sub(employee,attendance,score,certificate)]
+
+## Workflows (5)
+1. HR-员工编号: on create employees → SQL "EMP-YYYY-NNN"
+2. HR-合同到期提醒: on create/update contracts → condition: end_date within 30 days AND status=生效中 → update status=即将到期(or add a remark)
+3. HR-请假天数校验: on create leaves → condition: days>5 → update status=待审批(keep)
+4. HR-入职自动建档: on update candidates status→已入职 → (log/note only, cannot auto-create employee cross-table easily)
+5. HR-薪资编号: on create payroll → SQL "SAL-YYYY-MM-NNN"
+
+## AI Employees (2)
+1. hr-analyst(HR数据分析师, nocobase-015-female, temp=0.3): skills=[dataModeling-getCollectionNames,dataModeling-getCollectionMetadata,dataSource-dataSourceQuery,dataSource-dataSourceCounting], prompt="你是HR数据分析师,可以查询员工/考勤/薪资/招聘等数据,提供人力资源分析", shortcuts on 员工花名册:["人员统计","考勤分析","薪资概览"]
+2. hr-assistant(HR助手, nocobase-003-male): skills=[frontend-formFiller,dataSource-dataSourceQuery,dataModeling-getCollectionMetadata], prompt="你是HR助手,帮助填写员工信息和招聘表单", button on 员工花名册 table:"智能填写"
+
+## Test Data
+Insert via nb_execute_sql: 5 departments, 8 positions, 20 employees, 10 contracts, 40 attendance records (last week), 8 leaves, 5 overtime, 6 salary_items, 15 payroll, 3 recruitment, 10 candidates, 8 interviews, 4 trainings, 12 training_records. Use realistic Chinese names and data.
+
+## Execution
+Phase 1: ONE nb_execute_sql (all CREATE TABLE — do NOT include created_at, updated_at, created_by_id, updated_by_id columns in SQL DDL; nb_setup_collection creates these as NocoBase system fields automatically) → ONE nb_setup_collection × 14 (parent first: departments, positions, salary_items, trainings → then children)
+Phase 2: ONE nb_execute_sql (all INSERT)
+Phase 3: nb_create_menu (nested) → nb_crud_page × 10 (if nb_crud_page fails, fix params and retry — do NOT fall back to individual tools)
+Phase 4: Workflows (5×3)
+Phase 5: AI Employees (2+shortcuts)
+
+IMPORTANT: form_fields is a DSL string like "--- Section\nfield1* | field2\nfield3", NOT a JSON array. table_fields IS a JSON array like '["name","status","createdAt"]'.

@@ -1,0 +1,85 @@
+# Build ITSM (IT Service Management) System in NocoBase
+
+Your table prefix is nb_itsm_. Don't touch other prefixes (nb_am_, nb_tts_, nb_cbo_).
+
+Write all progress, issues, and results to ./notes.md.
+
+## Data Model (13 tables, prefix: nb_itsm_)
+
+### M1: 资产配置 (3 tables)
+
+**nb_itsm_assets** — name* VARCHAR(255), asset_tag* VARCHAR(50), serial_number VARCHAR(100), category(select:服务器/网络设备/终端设备/存储设备/外设/软件/其他, colors:red/orange/blue/green/cyan/purple/default), brand/model VARCHAR(100), status(select:使用中/闲置/维修中/已报废/已丢失, colors:green/blue/orange/red/grey), location VARCHAR(200), assigned_to VARCHAR(100), department VARCHAR(100), purchase_date DATE, warranty_date DATE, purchase_price NUMERIC(12,2), current_value NUMERIC(12,2), ip_address VARCHAR(50), os VARCHAR(100), specs TEXT, remark TEXT
+
+**nb_itsm_software** — name* VARCHAR(255), version VARCHAR(50), vendor VARCHAR(200), license_type(select:永久/订阅/开源/OEM/试用, colors:green/blue/cyan/orange/default), license_key VARCHAR(500), total_licenses INTEGER, used_licenses INTEGER DEFAULT 0, purchase_date/expiry_date DATE, annual_cost NUMERIC(12,2), status(select:使用中/即将到期/已过期/已停用, colors:green/orange/red/grey), category(select:操作系统/数据库/中间件/办公软件/安全软件/开发工具/其他), remark TEXT
+
+**nb_itsm_cmdb_relations** — source_asset_id→nb_itsm_assets(m2o), target_asset_id BIGINT, relation_type(select:依赖/连接/部署于/备份到/虚拟化, colors:blue/green/orange/cyan/purple), description TEXT, remark TEXT
+
+### M2: 事件与问题 (3 tables)
+
+**nb_itsm_incidents** — incident_no VARCHAR(50), title* VARCHAR(255), description TEXT, category(select:硬件故障/软件故障/网络问题/账号问题/安全事件/咨询/其他), impact(select:紧急/高/中/低, colors:red/orange/blue/default), urgency(select:紧急/高/中/低, colors:red/orange/blue/default), priority(select:P1/P2/P3/P4, colors:red/orange/blue/default), status(select:新建/已分配/处理中/待用户确认/已解决/已关闭, colors:blue/cyan/orange/purple/green/grey), assigned_to VARCHAR, assigned_group VARCHAR(100), reporter VARCHAR, contact_info VARCHAR, asset_id→nb_itsm_assets(m2o), resolution TEXT, resolved_at/closed_at TIMESTAMPTZ, sla_breach BOOLEAN DEFAULT false, remark TEXT
+
+**nb_itsm_problems** — problem_no VARCHAR(50), title* VARCHAR(255), description TEXT, root_cause TEXT, category(select:硬件/软件/网络/安全/流程/其他), status(select:已识别/分析中/已知错误/已解决/已关闭, colors:blue/orange/red/green/grey), priority(select:P1/P2/P3/P4, colors:red/orange/blue/default), assigned_to VARCHAR, workaround TEXT, solution TEXT, affected_services TEXT, resolved_at TIMESTAMPTZ, remark TEXT
+
+**nb_itsm_problem_incidents** — problem_id→nb_itsm_problems(m2o), incident_id→nb_itsm_incidents(m2o), remark TEXT
+
+### M3: 变更管理 (2 tables)
+
+**nb_itsm_changes** — change_no VARCHAR(50), title* VARCHAR(255), description TEXT, change_type(select:标准变更/普通变更/紧急变更, colors:green/blue/red), category(select:硬件/软件/网络/安全/配置/其他), risk_level(select:高/中/低, colors:red/orange/green), status(select:待审批/已审批/实施中/实施完成/已回滚/已关闭, colors:orange/green/blue/cyan/red/grey), planned_start/planned_end DATE, actual_start/actual_end DATE, impact_analysis TEXT, rollback_plan TEXT, implementer VARCHAR, approver VARCHAR, result(select:成功/部分成功/失败, colors:green/orange/red), remark TEXT
+
+**nb_itsm_change_tasks** — change_id→nb_itsm_changes(m2o), task_no INTEGER, title* VARCHAR(255), description TEXT, assignee VARCHAR, status(select:待执行/执行中/已完成/已跳过, colors:orange/blue/green/grey), planned_date DATE, actual_date DATE, result TEXT, remark TEXT
+
+### M4: 服务请求 (2 tables)
+
+**nb_itsm_service_catalog** — name* VARCHAR(255), code VARCHAR(50), category(select:账号管理/设备申请/软件安装/权限申请/网络服务/其他), description TEXT, sla_hours INTEGER, auto_approve BOOLEAN DEFAULT false, status(select:已上架/已下架, colors:green/grey), sort_order INTEGER, remark TEXT
+
+**nb_itsm_service_requests** — request_no VARCHAR(50), service_id→nb_itsm_service_catalog(m2o), requester VARCHAR(100), title* VARCHAR(255), description TEXT, priority(select:高/中/低, colors:red/orange/blue), status(select:待处理/处理中/待确认/已完成/已取消, colors:orange/blue/cyan/green/red), assigned_to VARCHAR, expected_date DATE, completed_at TIMESTAMPTZ, satisfaction(select:非常满意/满意/一般/不满意), remark TEXT
+
+### M5: 知识与 SLA (3 tables)
+
+**nb_itsm_knowledge** — title* VARCHAR(500), content TEXT, category(select:操作指南/故障排除/FAQ/最佳实践/架构文档/安全策略), tags VARCHAR(500), view_count INTEGER DEFAULT 0, status(select:草稿/已发布/已归档, colors:default/green/grey), remark TEXT
+
+**nb_itsm_sla_policies** — name* VARCHAR(255), service_level(select:白金/金/银/铜, colors:red/orange/blue/default), response_hours INTEGER, resolve_hours INTEGER, availability_pct NUMERIC(5,2), business_hours VARCHAR(100), escalation_rules TEXT, status(select:启用/停用, colors:green/red), remark TEXT
+
+**nb_itsm_audit_logs** — action_type(select:创建/更新/删除/审批/分配/关闭), target_type VARCHAR(100), target_id BIGINT, target_no VARCHAR(50), operator VARCHAR(100), old_value TEXT, new_value TEXT, action_time TIMESTAMPTZ DEFAULT NOW(), ip_address VARCHAR(50), remark TEXT
+
+### Relations (o2m)
+assets←incidents, assets←cmdb_relations, problems←problem_incidents, incidents←problem_incidents, changes←change_tasks, service_catalog←service_requests
+
+## Pages (10 pages, "IT服务" group icon:cloudserveroutlined OR settingoutlined)
+
+Menu: IT服务 → 资产配置(sub,laptopoutlined OR desktopoutlined)[IT资产/软件许可/配置关系] + 事件问题(sub,bugoutlined OR warningoutlined)[事件管理/问题管理] + 变更发布(sub,deploymentunitoutlined OR tooloutlined)[变更管理] + 服务台(sub,customerserviceoutlined)[服务目录/服务请求/知识库/SLA策略]
+
+1. IT资产 — KPIs(资产总数/使用中/闲置/维修中), cols(asset_tag,name,category,brand,model,status,location,assigned_to,purchase_date), filter(name,category,status,department), form(--- 基本信息\nname*|asset_tag*\nserial_number|category\nbrand|model\nstatus|location\nassigned_to|department\n--- 采购信息\npurchase_date|warranty_date\npurchase_price|current_value\n--- 技术信息\nip_address|os\nspecs\nremark), detail(drawer,large):[资产详情, 关联事件 sub(incident_no,title,priority,status,createdAt)]
+2. 软件许可 — KPIs(软件总数/即将到期/已过期), cols(name,version,vendor,license_type,total_licenses,used_licenses,expiry_date,status,annual_cost), filter(name,license_type,status), form(name*|version\nvendor|license_type\nlicense_key\ntotal_licenses|used_licenses\npurchase_date|expiry_date\nannual_cost|status\ncategory\nremark)
+3. 配置关系 — cols(source_asset,target_asset_id,relation_type,description), form(source_asset_id|target_asset_id\nrelation_type\ndescription\nremark)
+4. 事件管理 — KPIs(事件总数/新建/处理中/SLA违规), cols(incident_no,title,category,priority,status,assigned_to,asset,createdAt), filter(title,category,priority,status), form(incident_no|title*\ncategory|impact\nurgency|priority\nstatus|assigned_to\nassigned_group|reporter\ncontact_info|asset_id\ndescription\nresolution\nremark), detail(drawer,large):[事件详情]
+5. 问题管理 — KPIs(问题总数/分析中/已知错误/已解决), cols(problem_no,title,category,priority,status,assigned_to,createdAt), filter(title,category,status), form(problem_no|title*\ncategory|priority\nstatus|assigned_to\ndescription\nroot_cause\nworkaround\nsolution\naffected_services\nremark), detail(drawer,large):[问题详情, 关联事件 sub(incident,remark)]
+6. 变更管理 — KPIs(变更总数/待审批/实施中/成功率), cols(change_no,title,change_type,risk_level,status,planned_start,planned_end,implementer,result), filter(title,change_type,status,risk_level), form(change_no|title*\nchange_type|category\nrisk_level|status\nplanned_start|planned_end\nactual_start|actual_end\nimplementer|approver\nresult\nimpact_analysis\nrollback_plan\nremark), detail(drawer,large):[变更详情, 变更任务 sub(task_no,title,assignee,status,planned_date)]
+7. 服务目录 — cols(name,code,category,sla_hours,auto_approve,status,sort_order), filter(name,category,status), form(name*|code\ncategory|status\nsla_hours|auto_approve\nsort_order\ndescription\nremark)
+8. 服务请求 — KPIs(请求总数/待处理/处理中/已完成), cols(request_no,title,service,requester,priority,status,expected_date,satisfaction), filter(title,priority,status), form(request_no|service_id\ntitle*|requester\npriority|status\nassigned_to|expected_date\ndescription\nsatisfaction\nremark)
+9. 知识库 — cols(title,category,tags,view_count,status,createdAt), filter(title,category,status), form(title*|category\ntags|status\ncontent\nremark)
+10. SLA策略 — cols(name,service_level,response_hours,resolve_hours,availability_pct,business_hours,status), form(name*|service_level\nresponse_hours|resolve_hours\navailability_pct|status\nbusiness_hours\nescalation_rules\nremark)
+
+## Workflows (5)
+1. ITSM-事件编号: on create incidents → SQL "INC-YYYY-NNN"
+2. ITSM-问题编号: on create problems → SQL "PRB-YYYY-NNN"
+3. ITSM-变更编号: on create changes → SQL "CHG-YYYY-NNN"
+4. ITSM-服务请求编号: on create service_requests → SQL "SR-YYYY-NNN"
+5. ITSM-P1事件升级: on create/update incidents priority=P1 AND status!=已关闭 → update sla_breach=true (or log)
+
+## AI Employees (2)
+1. itsm-analyst(IT运维分析师, nocobase-018-female, temp=0.3): skills=[dataModeling-getCollectionNames,dataModeling-getCollectionMetadata,dataSource-dataSourceQuery,dataSource-dataSourceCounting], prompt="你是IT运维分析师,可以查询事件/问题/变更/资产等数据,提供IT服务分析和趋势报告", shortcuts on 事件管理:["事件统计","SLA报告","资产分析"]
+2. itsm-assistant(IT服务助手, nocobase-002-male): skills=[frontend-formFiller,dataSource-dataSourceQuery,dataModeling-getCollectionMetadata], prompt="你是IT服务助手,帮助填写事件/变更/服务请求表单,自动关联资产和知识库", button on 事件管理 table:"智能填写"
+
+## Test Data
+Insert via nb_execute_sql: 20 assets, 10 software, 8 cmdb_relations, 15 incidents, 5 problems, 6 problem_incidents, 8 changes, 12 change_tasks, 10 service_catalog, 12 service_requests, 8 knowledge, 4 sla_policies, 20 audit_logs. Use realistic IT infrastructure data (Chinese).
+
+## Execution
+Phase 0 (if needed): nb_clean_prefix("nb_itsm_") to remove any leftover tables/collections from previous attempts
+Phase 1: ONE nb_execute_sql (all CREATE TABLE with IF NOT EXISTS — system columns createdAt/updatedAt/createdById/updatedById are added automatically, do NOT include them in DDL) → ONE nb_setup_collection × 13 (parent first: assets, problems, incidents, changes, service_catalog → then children. nb_setup_collection is idempotent — always call it for every table even if already registered)
+Phase 2: ONE nb_execute_sql (all INSERT)
+Phase 3: nb_create_menu (nested) → nb_crud_page × 10 (if nb_crud_page fails, fix params and retry — do NOT fall back to individual tools)
+Phase 4: Workflows (5×3)
+Phase 5: AI Employees (2+shortcuts)
+
+IMPORTANT: form_fields is a DSL string like "--- Section\nfield1* | field2\nfield3", NOT a JSON array. table_fields IS a JSON array like '["name","status","createdAt"]'.

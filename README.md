@@ -125,9 +125,10 @@ pip install -e .
 uv pip install -e .
 ```
 
-### 2. Configure Claude Code
+### 2. Create `.mcp.json`
 
-Copy `.mcp.json.example` to your project's `.mcp.json`:
+Any MCP-compatible agent (Claude Code, Kimi Code, Cursor, Windsurf, etc.) can use this config.
+Create `.mcp.json` in your working directory:
 
 ```json
 {
@@ -146,24 +147,54 @@ Copy `.mcp.json.example` to your project's `.mcp.json`:
 }
 ```
 
-### 3. Add Skills
+### 3. Add CLAUDE.md (Agent Instructions)
 
-Copy the `skills/` directory to your project, or symlink it:
+Create a `CLAUDE.md` in your working directory to guide the agent (works with any agent, not just Claude):
 
-```bash
-ln -s /path/to/skills ~/.claude/skills/nocobase
+```markdown
+# NocoBase System Build
+
+Use MCP tools from the `nocobase` server. Key batch tools:
+- `nb_clean_prefix()` — clean up leftover tables/collections before rebuilding
+- `nb_setup_collection()` — ONE call per table (register + sync + upgrade + relations). Idempotent.
+- `nb_crud_page()` — ONE call per page (table + filter + KPI + forms + popup)
+- `nb_execute_sql()` — bulk DDL and DML. System columns added automatically on CREATE TABLE.
+- `nb_execute_sql_file()` — execute SQL from a local file (for large scripts)
+- `nb_create_menu()` — create group + pages in one call
+
+## Critical Rules
+1. Do NOT include created_at/updated_at/created_by_id/updated_by_id in SQL DDL — added automatically
+2. Use CREATE TABLE IF NOT EXISTS
+3. form_fields is a DSL string: "--- Section\nfield1* | field2\nfield3"
+4. table_fields is a JSON array: '["name","status","createdAt"]' — always include "createdAt"
+5. For large INSERT data: split one table per call, max ~20 rows
+6. Write progress to ./notes.md after each phase
 ```
 
-### 4. Use It
+### 4. Launch Any Agent
+
+```bash
+# Claude Code
+claude -p "$(cat prompt.txt)" --model sonnet --max-turns 80
+
+# Kimi Code
+kimi -w . --mcp-config-file .mcp.json -y --max-steps-per-turn 80 -p "$(cat CLAUDE.md) $(cat prompt.txt)"
+
+# Or use any MCP-compatible agent with the same .mcp.json
+```
+
+### 5. Interactive Mode
+
+You can also use it interactively in any agent chat:
 
 ```
 You: Create a project management system with projects, tasks, and categories.
 
-Claude: (activates data-modeling skill → executes SQL → registers → syncs → upgrades → relations)
+Agent: (executes SQL → registers collections → syncs → upgrades → relations)
 
 You: Build pages for the project management module.
 
-Claude: (activates page-building skill → creates menu → builds each page with tables, forms, KPIs, popups)
+Agent: (creates menu → builds each page with tables, forms, KPIs, popups)
 ```
 
 ## MCP Tools (55)
@@ -247,7 +278,10 @@ Claude: (activates page-building skill → creates menu → builds each page wit
 | `nb_delete_workflow` | Delete a workflow |
 | `nb_delete_workflows_by_prefix` | Batch delete by title prefix |
 
-## Skills
+## Skills (Claude Code only)
+
+Skills are a Claude Code feature that provides domain knowledge to guide tool usage.
+Other agents (Kimi, Cursor, etc.) use the `CLAUDE.md` file + prompt instead — no skills needed.
 
 | Skill | Description |
 |-------|-------------|
@@ -311,31 +345,62 @@ python3 nb-am-setup.py --drop --skip-data
 
 ## Agent-Built Demo Systems
 
-Beyond the scripted demo above, AI agents can autonomously build complete business systems from a single prompt file. The prompt defines the data model, pages, workflows, and AI employees — the agent figures out all tool calls on its own. This tests real agent capability, not script execution.
+Beyond the scripted demo, AI agents can autonomously build complete business systems from a single prompt file. The prompt defines data model, pages, workflows, and AI employees — the agent figures out all tool calls on its own.
 
-Tested systems (each built by a single Claude agent session):
+This has been tested with both **Claude Code (Sonnet)** and **Kimi Code (Kimi 2.5)**:
 
-| System | Tables | Pages | Workflows | AI Employees |
-|--------|--------|-------|-----------|--------------|
-| CRM (客户关系管理) | 16 | 12 | 6 | 3 |
-| HRM (人力资源管理) | 14 | 10 | 5 | 2 |
-| EDU (教务管理) | 13 | 12 | 5 | 2 |
-| ITSM (IT服务管理) | 13 | 10 | 5 | 2 |
-| WMS (仓储管理) | 14 | 12 | 5 | 2 |
+| System | Tables | Pages | Workflows | AI Employees | Tested With |
+|--------|--------|-------|-----------|--------------|-------------|
+| CRM (客户关系管理) | 16 | 12 | 6 | 3 | Claude, Kimi |
+| HRM (人力资源管理) | 14 | 10 | 5 | 2 | Claude, Kimi |
+| EDU (教务管理) | 13 | 12 | 5 | 2 | Claude |
+| ITSM (IT服务管理) | 13 | 10 | 5 | 2 | Kimi |
+| WMS (仓储管理) | 14 | 12 | 5 | 2 | Claude |
 
-### Run an Agent Build
+### How to Build a System
 
 ```bash
-# 1. Create a build directory with prompt and MCP config
+# 1. Set up build directory
 mkdir /tmp/build-crm && cd /tmp/build-crm
-cp /path/to/prompts/crm-prompt.txt prompt.txt
-cp /path/to/.mcp.json .mcp.json
 
-# 2. Launch agent to build autonomously
-claude -p "$(cat prompt.txt)" --model sonnet --max-turns 80 --dangerously-skip-permissions
+# 2. Copy the 3 required files:
+#    - .mcp.json   (MCP server config — see Quick Start step 2)
+#    - CLAUDE.md   (agent instructions — see Quick Start step 3)
+#    - prompt.txt  (system definition — 5 examples in examples/prompts/)
+
+# 3. Launch with any MCP-compatible agent:
+
+# Claude Code
+claude -p "$(cat prompt.txt)" --model sonnet --max-turns 80
+
+# Kimi Code
+kimi -w . --mcp-config-file .mcp.json -y --max-steps-per-turn 80 \
+  -p "$(cat CLAUDE.md) $(cat prompt.txt)"
+
+# Other agents: load .mcp.json and paste CLAUDE.md + prompt.txt as the prompt
 ```
 
-The agent reads the prompt, creates all tables via `nb_setup_collection`, builds pages via `nb_crud_page`, adds workflows via `nb_create_workflow` + `nb_add_node`, and creates AI employees — typically completing in 60-80 tool calls.
+### What the Agent Does
+
+The agent autonomously executes 5 phases (~60-80 tool calls):
+
+1. **Phase 1**: `nb_execute_sql` (DDL) + `nb_setup_collection` x N (register + sync + upgrade)
+2. **Phase 2**: `nb_execute_sql` (INSERT test data, one table per call)
+3. **Phase 3**: `nb_create_menu` + `nb_crud_page` x N (table + filter + KPI + forms + popup)
+4. **Phase 4**: `nb_create_workflow` + `nb_add_node` + `nb_enable_workflow` (auto-numbering, etc.)
+5. **Phase 5**: `nb_create_ai_employee` + `nb_ai_shortcut` / `nb_ai_button` (AI assistants)
+
+### Writing Your Own Prompt
+
+See `examples/prompts/` for prompt templates. A prompt file defines:
+
+- **Data Model**: table names, columns, types, select options with colors, FK relations
+- **Pages**: menu structure, KPIs, table columns, filter fields, form DSL, detail popup tabs
+- **Workflows**: triggers (on create/update), conditions, SQL auto-numbering
+- **AI Employees**: name, avatar, skills, shortcuts/buttons on pages
+- **Test Data**: record counts per table
+
+The CLAUDE.md file provides tool usage rules that work across all agents.
 
 ## Environment Variables
 

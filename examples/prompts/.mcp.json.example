@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "nocobase": {
+      "command": "uv",
+      "args": ["run", "--directory", "/home/albert/prj/vscodes/nocobase-mcp-skills/mcp-server", "nocobase-mcp"],
+      "env": {
+        "NB_URL": "http://localhost:14000",
+        "NB_USER": "admin@nocobase.com",
+        "NB_PASSWORD": "admin123",
+        "NB_DB_URL": "postgresql://nocobase:nocobase@localhost:5435/nocobase"
+      }
+    }
+  }
+}

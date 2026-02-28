@@ -1,0 +1,84 @@
+# Build EDU (Education & Training Management) System in NocoBase
+
+Your table prefix is nb_edu_. Don't touch other prefixes (nb_crm_, nb_hr_, nb_wms_, nb_itsm_, nb_am_, nb_pm_).
+
+Write all progress, issues, and results to ./notes.md.
+
+## Data Model (13 tables, prefix: nb_edu_)
+
+### M1: 基础设置 (3 tables)
+
+**nb_edu_departments** — name* VARCHAR(255), code VARCHAR(50), head VARCHAR(100), phone VARCHAR, status(select:正常/停用, colors:green/red), description TEXT, remark TEXT
+
+**nb_edu_teachers** — name* VARCHAR(100), teacher_no* VARCHAR(50), gender(select:男/女), phone/email VARCHAR, department_id→nb_edu_departments(m2o), title(select:教授/副教授/讲师/助教/外聘, colors:red/orange/blue/cyan/default), specialty VARCHAR(200), education(select:博士/硕士/本科), hire_date DATE, status(select:在职/休假/离职, colors:green/orange/red), bio TEXT, remark TEXT
+
+**nb_edu_classrooms** — name* VARCHAR(100), code VARCHAR(50), building VARCHAR(100), floor INTEGER, capacity INTEGER, room_type(select:普通教室/多媒体教室/实验室/会议室/机房, colors:default/blue/green/orange/cyan), equipment TEXT, status(select:可用/维护中/已停用, colors:green/orange/red), remark TEXT
+
+### M2: 课程管理 (3 tables)
+
+**nb_edu_courses** — name* VARCHAR(255), code* VARCHAR(50), department_id→nb_edu_departments(m2o), category(select:必修/选修/公开课/培训课/实验课, colors:red/orange/blue/green/cyan), credit NUMERIC(3,1), hours INTEGER, max_students INTEGER, level(select:初级/中级/高级/专家, colors:green/blue/orange/red), prerequisites VARCHAR(500), status(select:开课中/已结课/筹备中/已归档, colors:green/grey/blue/default), fee NUMERIC(10,2), description TEXT, syllabus TEXT, remark TEXT
+
+**nb_edu_schedules** — course_id→nb_edu_courses(m2o), teacher_id→nb_edu_teachers(m2o), classroom_id→nb_edu_classrooms(m2o), semester VARCHAR(50), day_of_week(select:周一/周二/周三/周四/周五/周六/周日), start_time VARCHAR(10), end_time VARCHAR(10), start_date/end_date DATE, status(select:正常/已调课/已取消, colors:green/orange/red), remark TEXT
+
+**nb_edu_materials** — title* VARCHAR(255), course_id→nb_edu_courses(m2o), material_type(select:教材/课件/视频/文档/题库/参考资料, colors:blue/green/orange/cyan/red/default), file_url VARCHAR(1000), file_size VARCHAR(50), upload_by VARCHAR, status(select:已发布/草稿/已撤回, colors:green/default/red), download_count INTEGER DEFAULT 0, description TEXT, remark TEXT
+
+### M3: 学员管理 (3 tables)
+
+**nb_edu_students** — name* VARCHAR(100), student_no* VARCHAR(50), gender(select:男/女), birth_date DATE, phone/email VARCHAR, id_card VARCHAR(18), department VARCHAR(100), class_name VARCHAR(100), enrollment_date DATE, graduation_date DATE, status(select:在读/休学/毕业/退学/延期, colors:green/orange/cyan/red/blue), education_level(select:本科/硕士/博士/专科/培训), emergency_contact/emergency_phone VARCHAR, address TEXT, remark TEXT
+
+**nb_edu_enrollments** — student_id→nb_edu_students(m2o), course_id→nb_edu_courses(m2o), semester VARCHAR(50), enrollment_date DATE, status(select:已报名/在学/已完成/已退课/不及格, colors:blue/green/cyan/grey/red), payment_status(select:已缴费/未缴费/已退费, colors:green/red/orange), amount NUMERIC(10,2), remark TEXT
+
+**nb_edu_attendance** — student_id→nb_edu_students(m2o), schedule_id→nb_edu_schedules(m2o), attendance_date DATE, status(select:出勤/迟到/早退/缺勤/请假, colors:green/orange/orange/red/blue), check_in_time TIMESTAMPTZ, remark TEXT
+
+### M4: 考试与成绩 (3 tables)
+
+**nb_edu_exams** — title* VARCHAR(255), course_id→nb_edu_courses(m2o), exam_type(select:期中考/期末考/模拟考/补考/入学考, colors:blue/green/orange/red/cyan), exam_date DATE, start_time/end_time VARCHAR(10), classroom_id→nb_edu_classrooms(m2o), duration INTEGER, total_score NUMERIC(5,1) DEFAULT 100, pass_score NUMERIC(5,1) DEFAULT 60, status(select:计划中/进行中/已完成/已取消, colors:blue/orange/green/red), invigilator VARCHAR, remark TEXT
+
+**nb_edu_scores** — student_id→nb_edu_students(m2o), exam_id→nb_edu_exams(m2o), course_id→nb_edu_courses(m2o), score NUMERIC(5,1), level(select:优秀/良好/中等/及格/不及格, colors:red/orange/blue/green/grey), attendance_score NUMERIC(5,1), homework_score NUMERIC(5,1), exam_score NUMERIC(5,1), total_score NUMERIC(5,1), rank INTEGER, remark TEXT
+
+**nb_edu_certificates** — student_id→nb_edu_students(m2o), course_id→nb_edu_courses(m2o), certificate_no* VARCHAR(100), title VARCHAR(255), issue_date DATE, expiry_date DATE, issuing_org VARCHAR(200), status(select:有效/已过期/已撤销, colors:green/orange/red), remark TEXT
+
+### M5: 财务 (1 table)
+
+**nb_edu_fees** — student_id→nb_edu_students(m2o), fee_type(select:学费/教材费/考试费/住宿费/其他, colors:blue/green/orange/cyan/default), amount NUMERIC(10,2), paid_amount NUMERIC(10,2) DEFAULT 0, semester VARCHAR(50), status(select:待缴/已缴/已退/减免, colors:orange/green/red/blue), payment_date DATE, payment_method(select:银行转账/微信/支付宝/现金), invoice_no VARCHAR(100), remark TEXT
+
+### Relations (o2m)
+departments←teachers, departments←courses, teachers←schedules, courses←schedules, courses←materials, courses←enrollments, courses←exams, courses←scores, courses←certificates, classrooms←schedules, classrooms←exams, students←enrollments, students←attendance, students←scores, students←certificates, students←fees, exams←scores, schedules←attendance
+
+## Pages (10 pages, "教学管理" group icon:readoutlined OR bookoutlined)
+
+Menu: 教学管理 → 基础设置(sub,settingoutlined)[院系管理/教师管理/教室管理] + 课程中心(sub,readoutlined)[课程管理/排课管理/教学资源] + 学员中心(sub,useroutlined OR idcardoutlined)[学员管理/选课报名/考勤记录] + 考试成绩(sub,solutionoutlined OR trophyoutlined)[考试管理/成绩管理/证书管理] + (bonus if time: 缴费管理)
+
+1. 院系管理 — cols(name,code,head,phone,status), form(name*|code\nhead|phone\nstatus\ndescription\nremark)
+2. 教师管理 — KPIs(教师总数/在职/教授/副教授), cols(teacher_no,name,department,title,specialty,phone,status), filter(name,department,title,status), form(name*|teacher_no*\ngender|department_id\ntitle|specialty\neducation|hire_date\nphone|email\nstatus\nbio\nremark), detail(drawer,large):[教师详情, 排课 sub(course,semester,day_of_week,start_time,end_time,classroom)]
+3. 教室管理 — cols(code,name,building,floor,capacity,room_type,status), filter(building,room_type,status), form(name*|code\nbuilding|floor\ncapacity|room_type\nstatus\nequipment\nremark)
+4. 课程管理 — KPIs(课程总数/开课中/筹备中), cols(code,name,department,category,credit,hours,max_students,level,status,fee), filter(name,category,department,status), form(name*|code*\ndepartment_id|category\ncredit|hours\nmax_students|level\nstatus|fee\nprerequisites\ndescription\nsyllabus\nremark), detail(drawer,large):[课程详情, 排课 sub(teacher,semester,day_of_week,start_time,classroom,status), 教学资源 sub(title,material_type,upload_by,status)]
+5. 排课管理 — cols(course,teacher,classroom,semester,day_of_week,start_time,end_time,status), filter(course,teacher,semester,status), form(course_id|teacher_id\nclassroom_id|semester\nday_of_week|start_time\nend_time\nstart_date|end_date\nstatus\nremark)
+6. 学员管理 — KPIs(学员总数/在读/毕业/本学期新生), cols(student_no,name,gender,department,class_name,education_level,enrollment_date,status), filter(name,department,status,education_level), form(--- 基本信息\nname*|student_no*\ngender|birth_date\nid_card|education_level\n--- 学籍信息\ndepartment|class_name\nenrollment_date|graduation_date\nstatus\n--- 联系方式\nphone|email\naddress\nemergency_contact|emergency_phone\nremark), detail(drawer,large):[学员详情, 选课 sub(course,semester,status,payment_status,amount), 成绩 sub(course,exam,score,level,rank)]
+7. 选课报名 — cols(student,course,semester,enrollment_date,status,payment_status,amount), filter(student,course,semester,status), form(student_id|course_id\nsemester|enrollment_date\nstatus|payment_status\namount\nremark)
+8. 考试管理 — KPIs(考试总数/计划中/已完成), cols(title,course,exam_type,exam_date,start_time,duration,classroom,total_score,status), filter(title,course,exam_type,status), form(title*|course_id\nexam_type|exam_date\nstart_time|end_time\nclassroom_id|duration\ntotal_score|pass_score\nstatus|invigilator\nremark), detail(drawer,large):[考试详情, 成绩 sub(student,score,level,rank)]
+9. 成绩管理 — cols(student,course,exam,score,attendance_score,homework_score,exam_score,total_score,level,rank), filter(student,course,level), form(student_id|exam_id\ncourse_id|score\nattendance_score|homework_score\nexam_score|total_score\nlevel|rank\nremark)
+10. 证书管理 — cols(certificate_no,student,course,title,issue_date,expiry_date,issuing_org,status), filter(student,course,status), form(certificate_no*|student_id\ncourse_id|title\nissue_date|expiry_date\nissuing_org|status\nremark)
+
+## Workflows (5)
+1. EDU-课程编号: on create courses → SQL "CRS-YYYY-NNN"
+2. EDU-考试编号: on create exams → SQL "EX-YYYY-NNN"
+3. EDU-证书编号: on create certificates → SQL "CRT-YYYY-NNN"
+4. EDU-选课状态: on create enrollments → update status to 已报名
+5. EDU-成绩等级: on create/update scores → condition: score>=90→优秀, >=80→良好, >=70→中等, >=60→及格, else→不及格 (use SQL or condition node)
+
+## AI Employees (2)
+1. edu-analyst(教学分析师, nocobase-016-female, temp=0.3): skills=[dataModeling-getCollectionNames,dataModeling-getCollectionMetadata,dataSource-dataSourceQuery,dataSource-dataSourceCounting], prompt="你是教学数据分析师,可以查询课程/学员/成绩/出勤等数据,提供教学质量分析", shortcuts on 课程管理:["课程统计","成绩分析","出勤报告"]
+2. edu-assistant(教务助手, nocobase-004-male): skills=[frontend-formFiller,dataSource-dataSourceQuery,dataModeling-getCollectionMetadata], prompt="你是教务助手,帮助填写选课/排课/考试等表单", button on 学员管理 table:"智能填写"
+
+## Test Data
+Insert via nb_execute_sql: 4 departments, 12 teachers, 8 classrooms, 10 courses, 15 schedules, 10 materials, 25 students, 40 enrollments, 60 attendance, 6 exams, 50 scores, 10 certificates, 20 fees. Use realistic Chinese education data (university/training).
+
+## Execution
+Phase 1: ONE nb_execute_sql (all CREATE TABLE — do NOT include created_at, updated_at, created_by_id, updated_by_id columns in SQL DDL; nb_setup_collection creates these as NocoBase system fields automatically) → ONE nb_setup_collection × 13 (parent first: departments, classrooms → teachers, courses, students → then children)
+Phase 2: ONE nb_execute_sql (all INSERT)
+Phase 3: nb_create_menu (nested) → nb_crud_page × 10 (if nb_crud_page fails, fix params and retry — do NOT fall back to individual tools)
+Phase 4: Workflows (5×3)
+Phase 5: AI Employees (2+shortcuts)
+
+IMPORTANT: form_fields is a DSL string like "--- Section\nfield1* | field2\nfield3", NOT a JSON array. table_fields IS a JSON array like '["name","status","createdAt"]'.

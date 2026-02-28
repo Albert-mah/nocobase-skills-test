@@ -1,0 +1,86 @@
+# Build WMS (Warehouse Management) System in NocoBase
+
+NOTE: You are 1 of 5 agents building different systems in the SAME NocoBase instance simultaneously. Other agents are building: CRM(nb_crm_), HRM(nb_hr_), ITSM(nb_itsm_), EDU(nb_edu_). Your prefix is nb_wms_. Don't touch other prefixes. If you see other menu groups appearing, that's normal.
+
+Write all progress, issues, and results to ./notes.md.
+
+## Data Model (14 tables, prefix: nb_wms_)
+
+### M1: 基础数据 (4 tables)
+
+**nb_wms_warehouses** — name* VARCHAR(255), code* VARCHAR(50), address TEXT, manager VARCHAR(100), phone VARCHAR, capacity NUMERIC(12,2), warehouse_type(select:原料仓/成品仓/半成品仓/退货仓/暂存仓, colors:blue/green/cyan/red/orange), status(select:正常/停用/盘点中, colors:green/red/orange), remark TEXT
+
+**nb_wms_locations** — code* VARCHAR(50), name VARCHAR(100), warehouse_id→nb_wms_warehouses(m2o), zone VARCHAR(50), aisle VARCHAR(20), shelf VARCHAR(20), level VARCHAR(20), location_type(select:存储位/拣货位/暂存位/不良品位, colors:blue/green/orange/red), max_weight NUMERIC(10,2), status(select:空闲/占用/锁定, colors:green/blue/red), remark TEXT
+
+**nb_wms_products** — name* VARCHAR(255), sku* VARCHAR(100), barcode VARCHAR(100), category(select:原材料/半成品/成品/包装材料/辅料/其他, colors:blue/cyan/green/orange/default/grey), unit(select:个/箱/托/千克/米/升), spec VARCHAR(200), brand VARCHAR(100), min_stock INTEGER DEFAULT 0, max_stock INTEGER DEFAULT 9999, weight NUMERIC(10,3), volume NUMERIC(10,3), price NUMERIC(12,2), cost NUMERIC(12,2), status(select:正常/停用/淘汰, colors:green/red/grey), description TEXT
+
+**nb_wms_suppliers** — name* VARCHAR(255), code VARCHAR(50), contact_person/phone/email VARCHAR, address TEXT, supplier_type(select:原料/设备/包装/物流/其他), level(select:A/B/C/D, colors:red/orange/blue/default), status(select:合作中/暂停/终止, colors:green/orange/red), remark TEXT
+
+### M2: 入库管理 (2 tables)
+
+**nb_wms_inbound_orders** — order_no VARCHAR(50), inbound_type(select:采购入库/生产入库/退货入库/调拨入库/其他, colors:blue/green/orange/cyan/default), supplier_id→nb_wms_suppliers(m2o), warehouse_id→nb_wms_warehouses(m2o), total_quantity INTEGER, total_amount NUMERIC(14,2), status(select:待收货/质检中/已入库/已取消, colors:orange/blue/green/red), expected_date/actual_date DATE, operator VARCHAR, remark TEXT
+
+**nb_wms_inbound_items** — inbound_id→nb_wms_inbound_orders(m2o), product_id→nb_wms_products(m2o), location_id→nb_wms_locations(m2o), expected_qty/actual_qty INTEGER, unit_price NUMERIC(12,2), amount NUMERIC(14,2), batch_no VARCHAR(50), production_date/expiry_date DATE, status(select:待检/合格/不合格, colors:orange/green/red), remark TEXT
+
+### M3: 出库管理 (2 tables)
+
+**nb_wms_outbound_orders** — order_no VARCHAR(50), outbound_type(select:销售出库/生产领料/调拨出库/报废出库/其他, colors:blue/green/cyan/red/default), warehouse_id→nb_wms_warehouses(m2o), customer VARCHAR(200), total_quantity INTEGER, total_amount NUMERIC(14,2), status(select:待拣货/拣货中/已出库/已取消, colors:orange/blue/green/red), expected_date/actual_date DATE, operator VARCHAR, remark TEXT
+
+**nb_wms_outbound_items** — outbound_id→nb_wms_outbound_orders(m2o), product_id→nb_wms_products(m2o), location_id→nb_wms_locations(m2o), requested_qty/picked_qty INTEGER, unit_price NUMERIC(12,2), amount NUMERIC(14,2), batch_no VARCHAR(50), status(select:待拣/已拣/缺货, colors:orange/green/red), remark TEXT
+
+### M4: 库存管理 (3 tables)
+
+**nb_wms_inventory** — product_id→nb_wms_products(m2o), warehouse_id→nb_wms_warehouses(m2o), location_id→nb_wms_locations(m2o), quantity INTEGER DEFAULT 0, reserved INTEGER DEFAULT 0, available INTEGER DEFAULT 0, batch_no VARCHAR(50), cost_price NUMERIC(12,2), last_check_date DATE, remark TEXT
+
+**nb_wms_inventory_moves** — product_id→nb_wms_products(m2o), move_type(select:入库/出库/调拨/盘盈/盘亏/报废, colors:green/red/blue/cyan/orange/grey), from_warehouse VARCHAR, to_warehouse VARCHAR, from_location VARCHAR, to_location VARCHAR, quantity INTEGER, batch_no VARCHAR, reference_no VARCHAR, move_date TIMESTAMPTZ, operator VARCHAR, remark TEXT
+
+**nb_wms_stock_check** — check_no VARCHAR(50), warehouse_id→nb_wms_warehouses(m2o), check_type(select:全盘/抽盘/动碰盘, colors:blue/orange/green), status(select:计划中/盘点中/已完成/已取消, colors:blue/orange/green/red), planned_date/actual_date DATE, total_items INTEGER, diff_items INTEGER, operator VARCHAR, remark TEXT
+
+### M5: 调拨与退货 (3 tables)
+
+**nb_wms_transfers** — transfer_no VARCHAR(50), from_warehouse_id→nb_wms_warehouses(m2o), to_warehouse_id→nb_wms_warehouses(m2o), total_quantity INTEGER, status(select:待审批/已审批/调拨中/已完成/已取消, colors:orange/green/blue/cyan/red), transfer_date DATE, reason TEXT, operator VARCHAR, remark TEXT
+
+**nb_wms_transfer_items** — transfer_id→nb_wms_transfers(m2o), product_id→nb_wms_products(m2o), quantity INTEGER, batch_no VARCHAR, from_location VARCHAR, to_location VARCHAR, status(select:待调拨/已调拨, colors:orange/green), remark TEXT
+
+**nb_wms_returns** — return_no VARCHAR(50), return_type(select:采购退货/客户退货, colors:blue/orange), supplier_id→nb_wms_suppliers(m2o), warehouse_id→nb_wms_warehouses(m2o), total_quantity INTEGER, total_amount NUMERIC(14,2), status(select:待处理/已检验/已入库/已退款, colors:orange/blue/green/cyan), return_date DATE, reason TEXT, remark TEXT
+
+### Relations (o2m)
+warehouses←locations, warehouses←inbound_orders, warehouses←outbound_orders, warehouses←inventory, warehouses←stock_check, warehouses←transfers(from), suppliers←inbound_orders, suppliers←returns, products←inbound_items, products←outbound_items, products←inventory, products←inventory_moves, products←transfer_items, inbound_orders←inbound_items, outbound_orders←outbound_items, transfers←transfer_items, locations←inbound_items, locations←outbound_items, locations←inventory
+
+## Pages (10 pages, "仓储管理" group icon:containeroutlined)
+
+Menu: 仓储管理 → 基础数据(sub,databaseoutlined)[仓库管理/库位管理/产品目录/供应商] + 出入库(sub,swapoutlined)[入库管理/出库管理] + 库存(sub,barchartoutlined)[库存查询/库存流水/盘点管理] + 调拨退货(sub,retweet OR sendoutlined)[调拨管理]
+
+1. 仓库管理 — KPIs(仓库总数/正常/盘点中), cols(code,name,warehouse_type,manager,capacity,status), filter(name,warehouse_type,status), form(name*|code*\nwarehouse_type|status\nmanager|phone\ncapacity\naddress\nremark), detail(drawer,large):[仓库详情, 库位 sub(code,name,zone,aisle,location_type,status)]
+2. 库位管理 — cols(code,name,warehouse,zone,aisle,shelf,level,location_type,status), filter(warehouse,zone,status), form(code*|name\nwarehouse_id|zone\naisle|shelf\nlevel|location_type\nmax_weight|status\nremark)
+3. 产品目录 — KPIs(产品总数/正常/低库存预警), cols(sku,name,category,brand,spec,unit,price,cost,min_stock,status), filter(name,sku,category,status), form(name*|sku*\nbarcode|category\nunit|spec\nbrand|status\nprice|cost\nmin_stock|max_stock\nweight|volume\ndescription), detail(drawer,medium)
+4. 供应商 — cols(name,code,contact_person,phone,supplier_type,level,status), filter(name,supplier_type,status), form(name*|code\ncontact_person|phone\nemail|supplier_type\nlevel|status\naddress\nremark)
+5. 入库管理 — KPIs(今日入库/待收货/质检中/本月入库), cols(order_no,inbound_type,supplier,warehouse,total_quantity,total_amount,status,expected_date), filter(order_no,inbound_type,status,warehouse), form(order_no|inbound_type\nsupplier_id|warehouse_id\ntotal_quantity|total_amount\nstatus\nexpected_date|actual_date\noperator\nremark), detail(drawer,large):[入库详情, 入库明细 sub(product,expected_qty,actual_qty,unit_price,batch_no,status)]
+6. 出库管理 — KPIs(今日出库/待拣货/拣货中/本月出库), cols(order_no,outbound_type,warehouse,customer,total_quantity,total_amount,status,expected_date), filter(order_no,outbound_type,status), form(order_no|outbound_type\nwarehouse_id|customer\ntotal_quantity|total_amount\nstatus\nexpected_date|actual_date\noperator\nremark), detail(drawer,large):[出库详情, 出库明细 sub(product,requested_qty,picked_qty,unit_price,batch_no,status)]
+7. 库存查询 — cols(product,warehouse,location,quantity,reserved,available,batch_no,cost_price,last_check_date), filter(product,warehouse), form(product_id|warehouse_id\nlocation_id|batch_no\nquantity|reserved\navailable\ncost_price|last_check_date\nremark)
+8. 库存流水 — cols(product,move_type,from_warehouse,to_warehouse,quantity,batch_no,reference_no,move_date,operator), filter(product,move_type)
+9. 盘点管理 — cols(check_no,warehouse,check_type,status,planned_date,actual_date,total_items,diff_items,operator), filter(warehouse,status), form(check_no|warehouse_id\ncheck_type|status\nplanned_date|actual_date\ntotal_items|diff_items\noperator\nremark)
+10. 调拨管理 — cols(transfer_no,from_warehouse,to_warehouse,total_quantity,status,transfer_date,operator), filter(status), form(transfer_no|status\nfrom_warehouse_id|to_warehouse_id\ntotal_quantity|transfer_date\nreason\noperator\nremark), detail(drawer,large):[调拨详情, 调拨明细 sub(product,quantity,batch_no,from_location,to_location,status)]
+
+## Workflows (5)
+1. WMS-入库编号: on create inbound_orders → SQL "IN-YYYY-NNN"
+2. WMS-出库编号: on create outbound_orders → SQL "OUT-YYYY-NNN"
+3. WMS-调拨编号: on create transfers → SQL "TF-YYYY-NNN"
+4. WMS-盘点编号: on create stock_check → SQL "SC-YYYY-NNN"
+5. WMS-退货编号: on create returns → SQL "RT-YYYY-NNN"
+
+## AI Employees (2)
+1. wms-analyst(库存分析师, nocobase-012-female, temp=0.3): skills=[dataModeling-getCollectionNames,dataModeling-getCollectionMetadata,dataSource-dataSourceQuery,dataSource-dataSourceCounting], prompt="你是仓储数据分析师,可以查询库存/出入库/盘点等数据,提供库存分析和预警", shortcuts on 库存查询:["库存预警","出入库统计","周转分析"]
+2. wms-assistant(仓储助手, nocobase-007-male): skills=[frontend-formFiller,dataSource-dataSourceQuery,dataModeling-getCollectionMetadata], prompt="你是仓储助手,帮助填写入库/出库/调拨单据", button on 入库管理 table:"智能填写"
+
+## Test Data
+Insert via nb_execute_sql: 4 warehouses, 20 locations, 15 products, 5 suppliers, 8 inbound_orders, 20 inbound_items, 6 outbound_orders, 15 outbound_items, 30 inventory, 25 inventory_moves, 3 stock_check, 4 transfers, 10 transfer_items, 3 returns. Use realistic Chinese warehouse/logistics data.
+
+## Execution
+Phase 1: ONE nb_execute_sql (all CREATE TABLE — do NOT include created_at, updated_at, created_by_id, updated_by_id columns in SQL DDL; nb_setup_collection creates these as NocoBase system fields automatically) → ONE nb_setup_collection × 14 (parent first: warehouses, products, suppliers → then children)
+Phase 2: ONE nb_execute_sql (all INSERT)
+Phase 3: nb_create_menu (nested) → nb_crud_page × 10 (if nb_crud_page fails, fix params and retry — do NOT fall back to individual tools)
+Phase 4: Workflows (5×3)
+Phase 5: AI Employees (2+shortcuts)
+
+IMPORTANT: form_fields is a DSL string like "--- Section\nfield1* | field2\nfield3", NOT a JSON array. table_fields IS a JSON array like '["name","status","createdAt"]'.

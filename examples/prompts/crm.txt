@@ -1,0 +1,93 @@
+# Build CRM System in NocoBase
+
+Your table prefix is nb_crm_. Don't touch other prefixes (nb_am_, nb_tts_, nb_cbo_).
+
+Write all progress, issues, and results to ./notes.md.
+
+## Data Model (16 tables, prefix: nb_crm_)
+
+### M1: 客户管理 (4 tables)
+
+**nb_crm_customers** — name* VARCHAR(255), code VARCHAR(50), short_name VARCHAR(100), customer_type(select:企业客户/个人客户), industry(select:互联网/金融/制造/教育/医疗/零售/房地产/物流/能源/其他), scale(select:大型/中型/小型/微型), source(select:官网/转介绍/展会/电销/广告/社交媒体/渠道合作/其他), status(select:潜在/跟进中/已签约/已流失/黑名单, colors:default/blue/green/red/grey), level(select:S/A/B/C/D, colors:red/orange/blue/cyan/default), address/city/province VARCHAR, phone/email/website VARCHAR, annual_revenue NUMERIC(14,2), employee_count INTEGER, remark TEXT
+
+**nb_crm_contacts** — name* VARCHAR(100), gender VARCHAR(10), position/department VARCHAR(100), phone/mobile/email/wechat VARCHAR, is_primary BOOLEAN, is_decision_maker BOOLEAN, birthday DATE, remark TEXT, customer_id→nb_crm_customers(m2o)
+
+**nb_crm_leads** — name* VARCHAR(255), company/position VARCHAR, phone/mobile/email VARCHAR, source(select:same as customer), status(select:新线索/跟进中/已转化/已丢弃, colors:blue/orange/green/red), score INTEGER, channel/campaign VARCHAR, remark TEXT
+
+**nb_crm_lead_pool** — lead_id→nb_crm_leads(m2o), reason(select:超时未跟进/主动释放/客户拒绝/其他), released_at/claimed_at TIMESTAMPTZ, status(select:待认领/已认领/已过期, colors:orange/green/grey), remark TEXT
+
+### M2: 销售管理 (4 tables)
+
+**nb_crm_opportunities** — title* VARCHAR(255), opportunity_no VARCHAR(50), stage(select:初步接触/需求确认/方案报价/商务谈判/合同审批/赢单/输单, colors:default/blue/cyan/orange/purple/green/red), amount NUMERIC(14,2), probability INTEGER, expected_close_date/actual_close_date DATE, source(select), loss_reason/competitor VARCHAR, remark TEXT, customer_id→nb_crm_customers(m2o), contact_id→nb_crm_contacts(m2o)
+
+**nb_crm_quotes** — quote_no VARCHAR(50), title* VARCHAR(255), amount/discount_rate/final_amount NUMERIC, valid_until DATE, status(select:草稿/已发送/已接受/已拒绝/已过期, colors:default/blue/green/red/grey), remark TEXT, opportunity_id→nb_crm_opportunities(m2o), customer_id→nb_crm_customers(m2o)
+
+**nb_crm_activities** — activity_type(select:电话/拜访/邮件/会议/微信/演示/提案/其他), subject* VARCHAR(255), content TEXT, activity_date DATE, duration INTEGER, result(select:成功/待跟进/无效/拒绝, colors:green/orange/grey/red), next_action VARCHAR, next_date DATE, customer_id→nb_crm_customers(m2o), opportunity_id→nb_crm_opportunities(m2o), contact_id→nb_crm_contacts(m2o)
+
+**nb_crm_targets** — period VARCHAR(20), target_type(select:月度/季度/年度), target_amount/achieved_amount NUMERIC(14,2), target_count/achieved_count INTEGER, status(select:进行中/已完成/未达标, colors:blue/green/red), remark TEXT
+
+### M3: 合同回款 (4 tables)
+
+**nb_crm_contracts** — contract_no VARCHAR(50), title* VARCHAR(255), contract_type(select:标准合同/框架协议/补充协议/续约合同), amount/paid_amount NUMERIC(14,2), status(select:草稿/审批中/已签署/执行中/已完成/已终止, colors:default/blue/cyan/green/grey/red), sign_date/start_date/end_date DATE, payment_terms VARCHAR, remark TEXT, customer_id→nb_crm_customers(m2o), opportunity_id→nb_crm_opportunities(m2o)
+
+**nb_crm_contract_items** — product_name VARCHAR(255), specification VARCHAR, quantity INTEGER, unit VARCHAR, unit_price NUMERIC(12,2), discount NUMERIC(5,2), total NUMERIC(14,2), remark TEXT, contract_id→nb_crm_contracts(m2o), product_id→nb_crm_products(m2o)
+
+**nb_crm_payments** — payment_no VARCHAR(50), amount NUMERIC(14,2), payment_date DATE, payment_method(select:银行转账/支票/现金/在线支付), status(select:待确认/已到账/已退款, colors:orange/green/red), remark TEXT, contract_id→nb_crm_contracts(m2o), customer_id→nb_crm_customers(m2o)
+
+**nb_crm_products** — name* VARCHAR(255), code VARCHAR(50), category(select:软件/硬件/服务/咨询/培训/实施/其他), price/cost NUMERIC(12,2), unit(select:套/个/年/月/次/人天), status(select:在售/停售/预售, colors:green/red/blue), description TEXT
+
+### M4: 服务支持 (4 tables)
+
+**nb_crm_tickets** — ticket_no VARCHAR(50), subject* VARCHAR(255), description TEXT, ticket_type(select:咨询/报障/投诉/建议/需求), priority(select:紧急/高/中/低, colors:red/orange/blue/default), status(select:待处理/处理中/待确认/已解决/已关闭, colors:orange/blue/cyan/green/grey), response_at/resolved_at TIMESTAMPTZ, satisfaction(select:非常满意/满意/一般/不满意), remark TEXT, customer_id→nb_crm_customers(m2o), contact_id→nb_crm_contacts(m2o)
+
+**nb_crm_knowledge** — title* VARCHAR(500), content TEXT, category(select:产品FAQ/技术文档/操作指南/故障排除/最佳实践), tags VARCHAR, view_count INTEGER DEFAULT 0, status(select:草稿/已发布/已归档, colors:default/green/grey)
+
+**nb_crm_competitors** — name* VARCHAR(255), website VARCHAR, strength/weakness TEXT, market_share VARCHAR, price_level(select:高/中/低), remark TEXT
+
+**nb_crm_approvals** — approval_type(select:合同审批/报价审批/折扣审批/退款审批), subject* VARCHAR(255), content TEXT, status(select:待审批/已通过/已驳回/已撤回, colors:orange/green/red/grey), submitted_at/decided_at TIMESTAMPTZ, decision_remark TEXT, related_id BIGINT, related_type VARCHAR, customer_id→nb_crm_customers(m2o)
+
+### Relations (o2m sides)
+customers←contacts, customers←opportunities, customers←activities, customers←contracts, customers←payments, customers←tickets, customers←approvals, opportunities←activities, opportunities←quotes, contracts←contract_items, contracts←payments, products←contract_items, leads←lead_pool, contacts←activities
+
+## Pages (12 pages, "CRM" group icon:teamoutlined)
+
+Menu: CRM → 客户管理(sub,idcardoutlined)[客户列表/联系人/线索管理/公海池] + 销售管理(sub,barchartoutlined)[商机管理/报价管理/跟进记录/销售目标] + 合同回款(sub,containeroutlined)[合同管理/回款记录/产品目录] + 服务支持(sub,tooloutlined)[服务工单]
+
+Use nb_crud_page for each page:
+1. 客户列表 — KPIs(客户总数/已签约/跟进中/本月新增), cols(name,code,customer_type,industry,level,status,city,phone,annual_revenue,createdAt), filter(name,industry,level,status), form(--- 基本信息\nname*|code\ncustomer_type|industry\nscale|level\nstatus|source\n--- 联系方式\nphone|email\nwebsite\n--- 地址\nprovince|city\naddress\n--- 其他\nannual_revenue|employee_count\nremark), detail(drawer,large):[客户详情 tab, 联系人 sub(name,position,mobile,email,is_primary), 商机 sub(title,stage,amount), 合同 sub(title,amount,status)]
+2. 联系人 — cols(name,customer,position,mobile,email,is_primary,is_decision_maker), filter(name,customer), form(name*|gender\nposition|department\nphone|mobile\nemail|wechat\nis_primary|is_decision_maker\nbirthday\nremark), detail(drawer,medium)
+3. 线索管理 — KPIs(总数/新线索/跟进中/已转化), cols(name,company,phone,source,status,score,createdAt), filter(name,status,source), form(name*|company\nposition|source\nphone|mobile\nemail\nchannel|campaign\nremark), detail(drawer,medium)
+4. 公海池 — cols(lead_id,reason,status,released_at,claimed_at), filter(status)
+5. 商机管理 — KPIs(商机总数/赢单数/总金额/跟进中), cols(opportunity_no,title,customer,stage,amount,probability,expected_close_date), filter(title,stage,customer), form(title*|opportunity_no\ncustomer_id|contact_id\nstage|source\namount|probability\nexpected_close_date|actual_close_date\ncompetitor|loss_reason\nremark), detail(drawer,large):[商机详情, 跟进记录 sub(activity_date,subject,activity_type,result), 报价 sub(quote_no,amount,status)]
+6. 报价管理 — cols(quote_no,title,customer,amount,final_amount,status,valid_until), filter(title,status), form(quote_no|title*\nopportunity_id|customer_id\namount|discount_rate\nfinal_amount|valid_until\nstatus\nremark), detail(drawer,medium)
+7. 跟进记录 — cols(activity_date,subject,activity_type,customer,opportunity,result,next_date), filter(activity_type,customer,result), form(subject*|activity_type\ncustomer_id|opportunity_id\ncontact_id|activity_date\nduration|result\ncontent\nnext_action|next_date)
+8. 销售目标 — cols(period,target_type,target_amount,achieved_amount,target_count,achieved_count,status), form(period*|target_type\ntarget_amount|achieved_amount\ntarget_count|achieved_count\nstatus\nremark)
+9. 合同管理 — KPIs(合同总数/执行中/合同总额/已回款), cols(contract_no,title,customer,contract_type,amount,paid_amount,status,end_date), filter(title,status,customer), form(contract_no|title*\ncontract_type|status\ncustomer_id|opportunity_id\namount|paid_amount\nsign_date|start_date\nend_date\npayment_terms\nremark), detail(drawer,large):[合同详情, 合同明细 sub(product_name,quantity,unit_price,total), 回款 sub(payment_no,amount,payment_date,status)]
+10. 回款记录 — cols(payment_no,customer,contract,amount,payment_date,payment_method,status), form(payment_no|amount*\npayment_date|payment_method\ncontract_id|customer_id\nstatus\nremark)
+11. 产品目录 — cols(name,code,category,price,cost,unit,status), filter(name,category,status), form(name*|code\ncategory|status\nprice|cost\nunit\ndescription)
+12. 服务工单 — KPIs(工单总数/待处理/处理中/已解决), cols(ticket_no,subject,customer,ticket_type,priority,status,response_at), filter(subject,status,priority,customer), form(ticket_no|subject*\nticket_type|priority\ncustomer_id|contact_id\nstatus|satisfaction\ndescription\nremark), detail(drawer,large)
+
+## Workflows (6)
+1. CRM-商机编号: on create opportunities → SQL "OP-YYYY-NNN"
+2. CRM-赢单同步: on update opportunities stage→赢单 → update customer status→已签约
+3. CRM-合同编号: on create contracts → SQL "CT-YYYY-NNN"
+4. CRM-回款编号: on create payments → SQL "PM-YYYY-NNN"
+5. CRM-工单编号: on create tickets → SQL "TK-YYYY-NNN"
+6. CRM-报价编号: on create quotes → SQL "QT-YYYY-NNN"
+
+## AI Employees (3)
+1. crm-analyst(CRM数据分析师, nocobase-010-female, temp=0.3): skills=[dataModeling-getCollectionNames,dataModeling-getCollectionMetadata,dataSource-dataSourceQuery,dataSource-dataSourceCounting], prompt="你是CRM数据分析师,查询客户/商机/合同/回款等数据表,用数据回答业务问题", shortcuts on 客户列表:["客户分析","商机漏斗","回款统计"]
+2. crm-assistant(客户助手, nocobase-005-male): skills=[frontend-formFiller,dataSource-dataSourceQuery,dataModeling-getCollectionMetadata], prompt="你是客户助手,帮助填写客户/商机/合同表单", button on 客户列表 table:"智能填写"
+3. crm-service(服务支持, nocobase-020-female, temp=0.5): skills=[dataSource-dataSourceQuery,dataModeling-getCollectionMetadata,dataModeling-getCollectionNames], prompt="你是服务支持助手,查询工单和知识库", shortcuts on 服务工单:["搜索知识库","工单统计"]
+
+## Test Data
+Insert via nb_execute_sql: 15 customers, 25 contacts, 10 leads, 5 lead_pool, 12 opportunities, 8 quotes, 5 competitors, 20 activities, 3 targets, 8 contracts, 15 contract_items, 10 payments, 6 products, 8 tickets, 5 knowledge, 3 approvals. Use realistic Chinese business data.
+
+## Execution
+Phase 1: ONE nb_execute_sql (all CREATE TABLE — do NOT include created_at, updated_at, created_by_id, updated_by_id columns in SQL DDL; nb_setup_collection creates these as NocoBase system fields automatically) → ONE nb_setup_collection per table (16 calls, parent first)
+Phase 2: ONE nb_execute_sql (all INSERT)
+Phase 3: nb_create_menu (nested groups) → nb_crud_page × 12 (if nb_crud_page fails, fix params and retry — do NOT fall back to individual tools)
+Phase 4: Workflows (6×3 calls)
+Phase 5: AI Employees (3+shortcuts)
+
+IMPORTANT: form_fields is a DSL string like "--- Section\nfield1* | field2\nfield3", NOT a JSON array. table_fields IS a JSON array like '["name","status","createdAt"]'.
