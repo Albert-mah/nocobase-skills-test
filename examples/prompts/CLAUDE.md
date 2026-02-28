@@ -8,6 +8,20 @@ Use MCP tools from the `nocobase` server. Key batch tools:
 - `nb_execute_sql_file()` — execute SQL from a local file (for large scripts)
 - `nb_create_menu()` — create group + pages in one call
 
+## JS Enhancement Tools
+
+After building CRUD pages, use these tools to add rich frontend behavior:
+
+- `nb_outline(parent, title, ctx_info, kind)` — **plan** a JS enhancement without writing code. Creates a visible placeholder card for later implementation by a JS agent. Kinds: `"block"` (chart/KPI), `"column"` (status tag, money format), `"item"` (form event/calc).
+- `nb_js_column(table_uid, title, code)` — add a custom-rendered table column (status badges, ¥ formatting, countdown, progress bars). Code has access to `ctx.record`, `ctx.React`, `ctx.antd`.
+- `nb_js_block(parent, title, code)` — add a custom block (charts, dashboards, rich KPI cards). Code has access to `ctx.React`, `ctx.antd`, `ctx.api`, `ctx.render()`.
+- `nb_event_flow(model_uid, event_name, code)` — attach form logic (auto-calculate, auto-fill, validation). Events: `formValuesChange`, `beforeSubmit`, `afterSubmit`. Code has access to `ctx.form`, `ctx.model`.
+
+### When to use outline vs direct JS
+
+- Use `nb_outline()` when you want to **plan** the enhancement for a separate JS agent to implement later
+- Use `nb_js_column()` / `nb_js_block()` / `nb_event_flow()` when you want to **implement** the enhancement now
+
 ## Critical Rules
 1. Do NOT include created_at, updated_at, created_by_id, updated_by_id columns in SQL DDL — they are added automatically by nb_execute_sql
 2. Use CREATE TABLE IF NOT EXISTS to avoid errors on re-runs
