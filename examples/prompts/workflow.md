@@ -80,15 +80,31 @@ Total: 24 outlines (15 columns, 6 items, 3 blocks)
 
 ## Stage 3: Enhance (JS Implementation)
 
-**Input**: Outline UIDs + original HTML prototypes (for visual reference)
+**Input**: Outline UIDs (from notes.md) + HTML prototypes (for visual reference)
 **Output**: JS columns, JS blocks, event flows replacing outlines
-**Agent**: JS-focused agent
+**Agent**: JS-focused agent with MCP tools
 
 ```bash
-# TODO: Stage 3 prompt not yet designed
-# The JS agent reads outlines via nb_inspect_page, then implements each one
-# using nb_js_column, nb_js_block, nb_event_flow
+cd /tmp/build-itsm
+# Copy: .mcp.json, CLAUDE.md, js-enhance prompt, build-notes.md, *.html, design-notes.md
+claude -p "$(cat prompt.txt)" --model sonnet --max-turns 60
 ```
+
+The agent:
+1. Reads build-notes.md for outline UIDs and their descriptions
+2. Implements each outline using `nb_js_column` / `nb_js_block` / `nb_event_flow`
+3. Uses HTML prototypes as visual reference for color schemes and rendering
+
+See `js-enhance-prompt.md` for the full prompt template.
+
+### Tested Results (ITSM, 2026-03-01)
+
+| Batch | Type | Count | Time |
+|-------|------|-------|------|
+| Status/type tags | nb_js_column | 9 | ~2 min |
+| Formatting (¥, countdown, progress) | nb_js_column | 6 | ~2 min |
+| Form events (auto-fill, calc) | nb_event_flow | 4 | ~1 min |
+| **Total** | | **19** | **~5 min** |
 
 ## Directory Structure
 
@@ -108,13 +124,22 @@ Total: 24 outlines (15 columns, 6 items, 3 blocks)
 └── build.log              # Agent execution log
 ```
 
-## Benefits Over DSL-Style Prompts
+## ITSM End-to-End Test Results (2026-03-01)
+
+| Stage | Time | Output |
+|-------|------|--------|
+| Stage 1: HTML Design | ~30 min | 4 HTML prototypes (665-717 lines each) + design-notes.md |
+| Stage 2: NocoBase Build | ~20 min | 13 tables, 148 test rows, 10 pages, 20 outlines, 5 workflows, 2 AI |
+| Stage 3: JS Enhance | ~5 min | 15 JS columns + 4 event flows (19/20 implemented) |
+| **Total** | **~55 min** | **Complete ITSM with rich UX** |
+
+### Comparison: Old vs New
 
 | Aspect | Old (cols/form DSL) | New (HTML-first) |
 |--------|---------------------|-------------------|
 | AI thinking mode | Database admin | Frontend designer |
-| UX richness | Zero JS enhancements | Badges, charts, auto-calc planned |
+| UX richness | Zero JS enhancements | 15 JS columns + 4 event flows |
 | Design review | Read DSL text | Open HTML in browser |
 | Separation | Design + impl mixed | Design → Build → Enhance |
-| JS planning | Not planned | Outlines mark every JS point |
+| JS planning | Not planned | 20 outlines mark every JS point |
 | Reusability | Prompt = one-shot | HTML = reusable design spec |
