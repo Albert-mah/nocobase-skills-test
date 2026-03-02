@@ -1,0 +1,751 @@
+# Block Registry
+# Total nodes: 10700
+# Pages: 60
+# Templates: 17
+
+## Collections
+  nb_am_asset_categories                    资产分类
+  nb_am_asset_transfers                     领用借用
+  nb_am_assets                              资产台账
+  nb_am_companies                           公司
+  nb_am_consumable_categories               易耗品分类
+  nb_am_consumable_requests                 领用申请
+  nb_am_consumables                         物品目录
+  nb_am_departments                         部门
+  nb_am_disposals                           报废
+  nb_am_locations                           场所
+  nb_am_purchase_requests                   采购申请
+  nb_am_repairs                             报修
+  nb_am_stock_records                       出入库记录
+  nb_am_suppliers                           供应商
+  nb_am_trips                               行程记录
+  nb_am_vehicle_costs                       车辆费用
+  nb_am_vehicle_maintenance                 保养维修
+  nb_am_vehicle_requests                    用车申请
+  nb_am_vehicles                            车辆档案
+
+## Charts > Executive
+   page_uid: cddxk4ij1ib  route: 336550704381954
+  [js_block] uid=23c83f65fd7  js=6703chars
+
+## Admin > Dashboard
+   page_uid: 48dv5z94n7n  route: 336919895408642
+  [js_block] uid=2c2a5c51a17  js=1979chars
+  [js_block] uid=319a6abd883  js=2717chars
+  [js_block] uid=5636abae498  title="⏱️ SLA Compliance"  js=3397chars
+  [js_block] uid=6a17eda0d0a  title="👥 Team Performance"  js=2911chars
+  [js_block] uid=8cab5378e89  js=1569chars
+  [js_block] uid=9e508c33572  title="📊 Ticket Distribution by Type"  js=3220chars
+  [js_block] uid=c8b3a26f220  js=2086chars
+
+## Charts > TeamLead
+   page_uid: x2qkzz5ro5m  route: 336929070448642
+  [js_block] uid=bcfe4130395  title="SLA Breach Alerts"  js=7864chars
+
+## Charts > Agent
+   page_uid: wje91qiuv0m  route: 336929594736642
+  [js_block] uid=fb6d84da601  js=9842chars
+
+## Charts > Operations
+   page_uid: dc1idrijyl2  route: 336931790454786
+  [js_block] uid=e97e82211cd  js=11370chars
+
+## test_history > dashboard2
+   page_uid: uukpal3xmbg  route: 336935636631554
+  [js_block] uid=833da47fd4c  js=26971chars
+
+## Admin > Tickets
+   page_uid: iktnlr6426a  route: 336961840545793
+  [js_item] uid=419c12e5059  js=8017chars
+
+## test_history > Create Ticket
+   page_uid: xirofix4nmb  route: 336969625174018
+  [js_block] uid=e471d83d171  js=11151chars
+
+## test_history > Customers prototype
+   page_uid: p48y92kfqxe  route: 336969715351554
+  [js_block] uid=469bc284615  js=12988chars
+    [popup] uid=469bc284615-detail  popup=nb_tts_customers  mode=drawer  child_page=1fd56c63fea
+      tab: Details uid=6c1f67b52ea
+    [popup] uid=469bc284615-detail-1  popup=nb_tts_customers  mode=drawer  child_page=eacb25d851d
+      tab: Details uid=243642dda6b
+  [js_block] uid=54d9d0b481a  js=14661chars
+  [js_block] uid=6ccc24f7a66
+
+## test_history > Home-proto
+   page_uid: 4eyrwtfokq7  route: 336969899900930
+  [js_block] uid=fcc8e0ab46c  js=12310chars
+
+## test_history > My Tickets prototype
+   page_uid: mwfb21a68fd  route: 336969929261058
+  [js_block] uid=b7ced3e4269  js=13157chars
+
+## test_history > Submit Ticket prototype
+   page_uid: 8e8vhoszvgw  route: 336979414679554
+  [js_block] uid=f46d7bfcf00  js=17786chars
+
+## test_history > Satisfaction Rating
+   page_uid: aup9jgne9qj  route: 336980138196994
+  [js_block] uid=2515df4aec4  js=13650chars
+
+## test_history > tickets-prototype
+   page_uid: r9nikrvobft  route: 337141461614594
+  [js_block] uid=697dc92b9bc  js=25905chars
+    [popup] uid=697dc92b9bc-detail  popup=nb_tts_tickets  mode=drawer  child_page=2432ea0fecb
+      tab: Details uid=1d6f3be4320
+  [js_block] uid=fd41b6e2e91  js=22026chars
+
+## Admin > Customers
+   page_uid: s15kvtel09v  route: 337369367511041
+  [js_item] uid=68694b45f05  js=4640chars
+
+## Home
+   page_uid: wgejul2zsjz  route: 337386543185921
+  [js_item] uid=d09a1ff5b7a  js=2079chars
+    [popup] uid=faq-detail  popup=nb_tts_faqs  mode=drawer  child_page=80d0c562fe5
+      tab: Details uid=ad0dc559ced
+  [js_item] uid=385e31cedbd  js=320chars
+  [js_block] uid=321d80e6205  title="📋 Ticket statistics"  js=3142chars
+  [js_item] uid=1aefc8b4787  js=441chars
+
+## test_history > My Tickets
+   page_uid: 6lrtj5hj5g1  route: 337503778177025
+  [js_item] uid=042b7cd79b3  js=5254chars
+  [js_item] uid=882965dd982  js=5634chars
+  [js_item] uid=b4af4e71732  events=[beforeRender]  js=3101chars
+  [js_item] uid=e621d15e79f  js=2806chars
+
+## Customer Center > My Tickets 
+   page_uid: 5xbehyt26zf  route: 338921991241730
+  [js_item] uid=116632efa6c  js=5254chars
+
+## Configs > Mails
+   page_uid: ixtxl1gvu2o  route: 338925321519105
+  [js_column] uid=77038e5c999  title="Time"  js=2407chars
+
+## Configs > Template Save
+   page_uid: bk6q4vjjioc  route: 339992648810498
+  [js_block] uid=58c2eee601d  js=8345chars
+
+## Project Management > Projects
+   page_uid: 6g0eq29a6bl  route: 350416952033281
+  [js_block] uid=4ofhl6tdm3t  title="Active"  js=614chars
+  [js_block] uid=4t5873kcdkv  title="Completed"  js=618chars
+  [js_block] uid=jhk76ky3qgq  title="Upcoming Deadlines"  js=616chars
+  [js_block] uid=m205z13boe7  title="At Risk"  js=617chars
+  [js_block] uid=qaiu5yvpkjm  title="Total Projects"  js=583chars
+  [js_block] uid=wwgwtmh4wmj  title="Status Distribution"  js=623chars
+
+## Project Management > Tasks
+   page_uid: sc8nuvh9xkh  route: 350417048502274
+  [js_block] uid=270agic1m0r  title="Task by Status"  js=619chars
+  [js_block] uid=3b6nrsad2xo  title="Overdue"  js=615chars
+  [js_block] uid=j0jevgnzsgc  title="Done"  js=605chars
+  [js_block] uid=o0zr681ax7n  title="In Progress"  js=626chars
+  [js_block] uid=ptltie3bgoa  title="Total Tasks"  js=574chars
+  [js_block] uid=tjd0g0u6bxw  title="My Tasks"  js=614chars
+
+## Project Management > Sprints
+   page_uid: jp5oq46now7  route: 350428477980673
+  [js_block] uid=49vpi6r3jd1  title="Completed"  js=617chars
+  [js_block] uid=63xw70yse9w  title="Planning"  js=602chars
+  [js_block] uid=cgzfa4yk9se  title="Velocity Trend"  js=629chars
+  [js_block] uid=mb42o0o0e4b  title="Active Sprints"  js=629chars
+
+## Project Management > Teams
+   page_uid: 5stbsahg1xv  route: 350428480077825
+  [js_block] uid=1qul2g832jz  title="Active Teams"  js=620chars
+  [js_block] uid=f489rewphhh  title="Total Members"  js=585chars
+  [js_block] uid=t73kd0t1cfs  title="Total Teams"  js=574chars
+  [js_block] uid=xti5jjeyodq  title="Team Workload Overview"  js=632chars
+
+## 资产管理 > 资产台账
+   page_uid: stqcb11iba2  route: 350550569058307
+  [js_block] uid=bf8qf9avet7  title="资产价值趋势"  js=597chars
+  [js_block] uid=ezcl3u2ttmv  title="在库"  js=610chars
+  [js_block] uid=f1nedwewpcx  title="报修中"  js=618chars
+  [js_block] uid=gptyxgr6c2s  title="总资产"  js=559chars
+  [js_block] uid=jq6jqrvlcz8  title="在用"  js=610chars
+  [js_block] uid=rhvv902gp3h  title="资产分类分布"  js=597chars
+  [table] uid=u0hdq40mnxg  coll=nb_am_assets  title="资产台账"
+    [col] category
+    [col] name
+    [col] status
+    [col] model
+    [col] brand
+    [col] custodian
+    [addnew] uid=jwr52af4cna  popup=nb_am_assets  mode=drawer  child_page=8ab3mrz2zg1
+      tab: New uid=m7tab2eq3i0
+    [js_column] uid=mp02hsingg9 title="状态" js=219chars
+    [col] asset_code
+    [col] company
+    [col] purchase_date
+    [col] purchase_price
+    [col] department
+  [form_edit] uid=0b9hsezkisf  coll=nb_am_assets  events=[formValuesChange]
+  [table] uid=c0ugfxnnse1  coll=nb_am_disposals  title="报废记录"
+    [col] estimated_salvage
+    [col] book_value
+    [addnew] uid=1974w9zwge9  popup=nb_am_disposals  mode=drawer  child_page=dv6l7svud2e
+      tab: New uid=lscg4l81d8y
+    [col] disposal_method
+    [col] reason
+    [js_column] uid=dhdewus7c07 title="状态" js=231chars
+    [col] status
+    [col] createdAt
+  [form_create] uid=i60uabjsxne  coll=nb_am_disposals
+  [js_column] uid=dhdewus7c07  title="状态"  js=231chars
+  [table] uid=i759z3tel1y  coll=nb_am_repairs  title="报修记录"
+    [col] repair_result
+    [col] fault_desc
+    [col] status
+    [col] repair_cost
+    [col] createdAt
+    [col] repair_no
+    [col] repair_method
+    [addnew] uid=wu9c1uwuqaz  popup=nb_am_repairs  mode=drawer  child_page=p6zrbz65xom
+      tab: New uid=etpww6dywvk
+    [js_column] uid=yu90pdm7h2q title="状态" js=213chars
+  [form_create] uid=61ku1i1j7of  coll=nb_am_repairs
+  [js_column] uid=yu90pdm7h2q  title="状态"  js=213chars
+  [table] uid=c92at3lj4et  coll=nb_am_asset_transfers  title="领用记录"
+    [col] expected_return_date
+    [col] createdAt
+    [col] transfer_type
+    [col] status
+    [addnew] uid=hnocczmxs8b  popup=nb_am_asset_transfers  mode=drawer  child_page=m4pqq77ktwy
+      tab: New uid=a4ab7cv5pwt
+    [col] actual_return_date
+    [col] applicant
+    [js_column] uid=ory68sfy5z6 title="状态" js=228chars
+  [form_create] uid=orapsvnd5dk  coll=nb_am_asset_transfers  events=[formValuesChange]
+  [js_column] uid=ory68sfy5z6  title="状态"  js=228chars
+  [js_block] uid=veyndq6lfi7  title="资产卡片"  js=2916chars
+  [form_create] uid=i11wxthmyu8  coll=nb_am_assets
+  [js_column] uid=mp02hsingg9  title="状态"  js=219chars
+
+## 资产管理 > 采购申请
+   page_uid: 5x04mntgg06  route: 350550569058309
+  [table] uid=0k773pr18nk  coll=nb_am_purchase_requests  title="采购申请列表"
+    [col] request_no
+    [col] total_price
+    [addnew] uid=7x65bw5cogd  popup=nb_am_purchase_requests  mode=drawer  child_page=69eh9pu9o1t
+      tab: New uid=1mgjh2jedu7
+    [col] status
+    [col] estimated_price
+    [col] applicant
+    [col] company
+    [col] category
+    [col] createdAt
+    [col] asset_name
+    [col] quantity
+    [js_column] uid=zm7lew8aztx title="审批" js=306chars
+  [form_edit] uid=pqfpxk7v3di  coll=nb_am_purchase_requests  events=[formValuesChange]
+  [form_create] uid=8zzcmdc4ekt  coll=nb_am_purchase_requests  events=[formValuesChange]
+  [js_column] uid=zm7lew8aztx  title="审批"  js=306chars
+  [js_block] uid=k3hn46s0030  title="总申请"  js=570chars
+  [js_block] uid=nc6cl6lyunz  title="已完成"  js=629chars
+  [js_block] uid=o20qc4170th  title="待审批"  js=715chars
+  [js_block] uid=x56w5xchq3v  title="采购中"  js=629chars
+
+## 资产管理 > 领用借用
+   page_uid: sguczfje5i7  route: 350550569058311
+  [table] uid=07zh19rxbr9  coll=nb_am_asset_transfers  title="领用/借用记录"
+    [col] transfer_type
+    [col] status
+    [addnew] uid=c4mw6nvmdk9  popup=nb_am_asset_transfers  mode=drawer  child_page=b3ywgvce2xu
+      tab: New uid=klnn07tctzq
+    [col] expected_return_date
+    [col] reason
+    [js_column] uid=izydxn59u72 title="类型" js=199chars
+    [col] createdAt
+    [js_column] uid=plx1wsy04at title="状态" js=245chars
+    [col] asset
+    [col] actual_return_date
+    [col] department
+    [col] applicant
+    [col] company
+  [form_create] uid=psndo8075pe  coll=nb_am_asset_transfers  events=[formValuesChange]
+  [js_column] uid=izydxn59u72  title="类型"  js=199chars
+  [js_column] uid=plx1wsy04at  title="状态"  js=245chars
+  [form_edit] uid=t4w49bswbfj  coll=nb_am_asset_transfers  events=[formValuesChange]
+  [js_block] uid=ba8ql7x9zka  title="待审批"  js=627chars
+  [js_block] uid=eeceifu7gpk  title="已发放"  js=627chars
+  [js_block] uid=lfwlzblgsn8  title="总记录"  js=568chars
+  [js_block] uid=nw66avdllvl  title="已归还"  js=627chars
+
+## 资产管理 > 报修管理
+   page_uid: vmdhxq11s5x  route: 350550569058313
+  [js_block] uid=2sjlsazer2a  title="待受理"  js=619chars
+  [js_block] uid=8bbqfxkftez  title="总报修"  js=560chars
+  [table] uid=jpmj5w3uqad  coll=nb_am_repairs  title="报修列表"
+    [col] repair_cost
+    [col] repair_no
+    [col] supplier
+    [col] repair_method
+    [col] asset
+    [js_column] uid=nnxlmr8ttq4 title="维修费" js=376chars
+    [js_column] uid=p8ae4u2lrfm title="状态" js=230chars
+    [col] status
+    [col] fault_desc
+    [col] applicant
+    [addnew] uid=wrw9bpq11gt  popup=nb_am_repairs  mode=drawer  child_page=m2pz6jxkqi3
+      tab: New uid=5ulak3ersfg
+    [col] createdAt
+    [col] repair_result
+  [js_column] uid=nnxlmr8ttq4  title="维修费"  js=376chars
+  [form_edit] uid=wejy4uj60g1  coll=nb_am_repairs  events=[formValuesChange]
+  [js_column] uid=p8ae4u2lrfm  title="状态"  js=230chars
+  [form_create] uid=ks2q7vckij2  coll=nb_am_repairs  events=[formValuesChange]
+  [js_block] uid=mx27lqe7899  title="维修中"  js=619chars
+  [js_block] uid=nl6q6zfjutg  title="已完成"  js=619chars
+
+## 资产管理 > 报废管理
+   page_uid: 0ltyljlzmfv  route: 350550569058315
+  [js_block] uid=6opdpto5zwq  title="待审批"  js=741chars
+  [js_block] uid=8ndaulbhtog  title="总申请"  js=562chars
+  [js_block] uid=d1bbqkz05fj  title="已报废"  js=621chars
+  [table] uid=jrdyre5ybg3  coll=nb_am_disposals  title="报废申请列表"
+    [addnew] uid=2wyylr2oiwi  popup=nb_am_disposals  mode=drawer  child_page=3iuoe4vke72
+      tab: New uid=ontoa9h1h2l
+    [js_column] uid=8backs319qa title="审批状态" js=326chars
+    [col] disposal_method
+    [js_column] uid=d57cbvofjfh title="账面价值" js=375chars
+    [col] applicant
+    [col] reason
+    [col] book_value
+    [col] estimated_salvage
+    [col] status
+    [col] asset
+    [col] createdAt
+  [form_create] uid=xd1duggy229  coll=nb_am_disposals  events=[formValuesChange]
+  [js_column] uid=8backs319qa  title="审批状态"  js=326chars
+  [js_column] uid=d57cbvofjfh  title="账面价值"  js=375chars
+  [form_edit] uid=9whekk426lw  coll=nb_am_disposals  events=[formValuesChange]
+  [js_block] uid=njt7z73t7vq  title="待处置"  js=621chars
+
+## 易耗品管理 > 物品目录
+   page_uid: ozsft67ee2g  route: 350550569058318
+  [js_block] uid=2htkv5vazoq  title="物品总数"  js=566chars
+  [js_block] uid=ocaa82ob8dz  title="启用中"  js=617chars
+  [table] uid=twpdgo6bdln  coll=nb_am_consumables  title="物品目录"
+    [col] code
+    [col] unit
+    [col] name
+    [addnew] uid=j2ipr378l20  popup=nb_am_consumables  mode=drawer  child_page=widslngmsoo
+      tab: New uid=sudku3639km
+    [col] storage_location
+    [col] safe_stock
+    [col] current_stock
+    [col] category
+    [col] status
+    [js_column] uid=spk9x2p5awe title="库存状态" js=292chars
+    [col] spec
+    [col] ref_price
+  [form_edit] uid=3ny1q12y161  coll=nb_am_consumables  events=[formValuesChange]
+  [form_create] uid=k3f3kh8nnh9  coll=nb_am_consumables
+  [js_column] uid=spk9x2p5awe  title="库存状态"  js=292chars
+  [js_block] uid=zki4z7kjm97  title="已停用"  js=617chars
+
+## 易耗品管理 > 领用申请
+   page_uid: 58hp5f04spr  route: 350550569058320
+  [js_block] uid=255jvucjd5t  title="总申请"  js=572chars
+  [js_block] uid=4061c5s8q0e  title="待发放"  js=631chars
+  [js_block] uid=4f5onupy4nf  title="已发放"  js=631chars
+  [table] uid=7xd9thg29by  coll=nb_am_consumable_requests  title="领用申请列表"
+    [col] createdAt
+    [col] total_amount
+    [col] company
+    [col] department
+    [js_column] uid=j5vhc62aakx title="审批状态" js=244chars
+    [col] applicant
+    [addnew] uid=ncnrblw72ub  popup=nb_am_consumable_requests  mode=drawer  child_page=8gz0ac4otao
+      tab: New uid=somuqhrvw54
+    [js_column] uid=pep6mc0l7nj title="金额" js=377chars
+    [col] status
+    [col] remark
+  [js_column] uid=j5vhc62aakx  title="审批状态"  js=244chars
+  [form_create] uid=1iwlw0ikehc  coll=nb_am_consumable_requests  events=[formValuesChange]
+  [js_column] uid=pep6mc0l7nj  title="金额"  js=377chars
+  [form_edit] uid=cbmwa49phv3  coll=nb_am_consumable_requests
+  [js_block] uid=vga57uzhriw  title="待审批"  js=631chars
+
+## 易耗品管理 > 库存管理
+   page_uid: 8x17zo4p9sc  route: 350550569058322
+  [js_block] uid=1fepmxmayg3  title="本月入库"  js=626chars
+  [js_block] uid=hey48k6rgz6  title="本月出库"  js=626chars
+  [js_block] uid=owtcep1q4g1  title="物品种类"  js=566chars
+  [table] uid=t2n3nfbq6ku  coll=nb_am_stock_records  title="出入库记录"
+    [col] createdAt
+    [col] quantity
+    [addnew] uid=6h3njlq4z1c  popup=nb_am_stock_records  mode=drawer  child_page=tv2b8l30x63
+      tab: New uid=y6ogeb7kde5
+    [col] company
+    [js_column] uid=d2zchn2kv93 title="单价" js=375chars
+    [col] operator
+    [col] unit_price
+    [col] record_type
+    [col] consumable
+    [js_column] uid=tskfkdrlgnp title="类型标记" js=207chars
+    [col] request
+  [form_create] uid=6bn98xcoqk2  coll=nb_am_stock_records  events=[formValuesChange]
+  [js_column] uid=d2zchn2kv93  title="单价"  js=375chars
+  [js_column] uid=tskfkdrlgnp  title="类型标记"  js=207chars
+
+## 易耗品管理 > 领用统计
+   page_uid: cfcas6llwcn  route: 350550569058324
+  [js_block] uid=c4gai87u91w  title="部门领用排名"  js=605chars
+  [js_block] uid=fjybk77kxqe  title="年度领用总额"  js=637chars
+  [js_block] uid=hj48mn5oujb  title="月度领用趋势"  js=595chars
+  [js_block] uid=rf7ryrc5691  title="领用人次"  js=616chars
+  [js_block] uid=wzq562xu789  title="物品领用排名"  js=605chars
+
+## 车辆管理 > 车辆档案
+   page_uid: 9usq8c1ifow  route: 350550569058327
+  [js_block] uid=58gqghrj8ni  title="可用"  js=612chars
+  [js_block] uid=bhew1qeo9sc  title="使用中"  js=620chars
+  [table] uid=k8tou9dkfe5  coll=nb_am_vehicles  title="车辆档案"
+    [col] fuel_type
+    [js_column] uid=0w9tnyfcmaa title="状态标记" js=224chars
+    [col] brand
+    [col] status
+    [addnew] uid=ouhbqempt45  popup=nb_am_vehicles  mode=drawer  child_page=ba0a2oagrbp
+      tab: New uid=a3f7jdyh1f1
+    [col] purchase_date
+    [col] plate_number
+    [col] current_mileage
+    [col] model
+    [col] company
+    [col] vehicle_type
+  [js_column] uid=0w9tnyfcmaa  title="状态标记"  js=224chars
+  [form_edit] uid=q0kot2rodns  coll=nb_am_vehicles
+  [form_create] uid=ia4eg3r6cem  coll=nb_am_vehicles  events=[formValuesChange]
+  [js_block] uid=nknvmgjai9i  title="维修中"  js=620chars
+  [js_block] uid=odh3m0u2uup  title="车辆总数"  js=563chars
+  [js_block] uid=ol0z4er7tft  title="车辆类型分布"  js=595chars
+
+## 车辆管理 > 用车申请
+   page_uid: phv1zcuoj1w  route: 350550569058329
+  [js_block] uid=90e2y2qohdf  title="待审批"  js=628chars
+  [table] uid=ix5ejpajc29  coll=nb_am_vehicle_requests  title="用车申请列表"
+    [col] vehicle
+    [col] return_time
+    [col] depart_time
+    [col] applicant
+    [js_column] uid=a6m0b10ayta title="审批状态" js=278chars
+    [col] destination
+    [addnew] uid=g4et0bip2uo  popup=nb_am_vehicle_requests  mode=drawer  child_page=t47fgyjsy2e
+      tab: New uid=eotk521jxmt
+    [col] passenger_count
+    [col] status
+    [col] driver
+    [col] company
+    [col] request_no
+    [col] need_driver
+    [col] use_date
+  [form_edit] uid=updzavdicvz  coll=nb_am_vehicle_requests  events=[formValuesChange]
+  [js_column] uid=a6m0b10ayta  title="审批状态"  js=278chars
+  [form_create] uid=mr013676vu3  coll=nb_am_vehicle_requests  events=[formValuesChange]
+  [js_block] uid=iy7wjp0kxyy  title="待派车"  js=628chars
+  [js_block] uid=ob0q090keg2  title="总申请"  js=569chars
+  [js_block] uid=vvebb070yl9  title="已派车"  js=628chars
+
+## 车辆管理 > 行程记录
+   page_uid: 54zxyghqcxd  route: 350550569058331
+  [js_block] uid=31sc49vqyjb  title="总行程"  js=558chars
+  [js_block] uid=ct33fnc6lsa  title="进行中"  js=617chars
+  [table] uid=tj4guxroh4g  coll=nb_am_trips  title="行程记录"
+    [addnew] uid=44o5osijw4y  popup=nb_am_trips  mode=drawer  child_page=nyrbibq1ubu
+      tab: New uid=p4173t4km3t
+    [col] status
+    [js_column] uid=4mvw661299y title="行程状态" js=179chars
+    [col] start_mileage
+    [col] end_mileage
+    [col] distance
+    [col] vehicle
+    [col] checkin_time
+    [col] createdAt
+    [col] request
+    [col] driver
+  [form_create] uid=hea994m6rs1  coll=nb_am_trips  events=[formValuesChange]
+  [js_column] uid=4mvw661299y  title="行程状态"  js=179chars
+  [form_edit] uid=ovuqfvvq19s  coll=nb_am_trips  events=[formValuesChange]
+  [js_block] uid=zz4arim5a0c  title="已完成"  js=617chars
+
+## 车辆管理 > 保养维修
+   page_uid: pogti6rkk9o  route: 350550571155456
+  [js_block] uid=5e6c9n0t520  title="维修中"  js=631chars
+  [js_block] uid=d2kwjqyaths  title="待审批"  js=631chars
+  [js_block] uid=f09m95gpiqi  title="总记录"  js=572chars
+  [js_block] uid=og4a0efb3vv  title="已完成"  js=631chars
+  [table] uid=zned4vlzdkh  coll=nb_am_vehicle_maintenance  title="保养维修记录"
+    [col] company
+    [col] plan_date
+    [js_column] uid=79u0193izai title="下次保养" js=469chars
+    [col] current_mileage
+    [col] vehicle
+    [js_column] uid=cuhd4ftnn7p title="状态" js=248chars
+    [col] total_cost
+    [col] supplier
+    [js_column] uid=ks133bt08bf title="总费用" js=375chars
+    [addnew] uid=qh24app270a  popup=nb_am_vehicle_maintenance  mode=drawer  child_page=rarftavm3ja
+      tab: New uid=e4pf8u6jdtc
+    [col] maint_type
+    [col] status
+    [col] use_insurance
+  [form_edit] uid=33omswi5p20  coll=nb_am_vehicle_maintenance  events=[formValuesChange]
+  [js_column] uid=79u0193izai  title="下次保养"  js=469chars
+  [js_column] uid=cuhd4ftnn7p  title="状态"  js=248chars
+  [js_column] uid=ks133bt08bf  title="总费用"  js=375chars
+  [form_create] uid=adgzfsian24  coll=nb_am_vehicle_maintenance  events=[formValuesChange]
+
+## 车辆管理 > 费用统计
+   page_uid: fniwtek7n4g  route: 350550571155458
+  [js_block] uid=0qk4iiz5hyj  title="油费/电费"  js=648chars
+  [js_block] uid=6x5f5n4yp3p  title="车辆总费用趋势"  js=597chars
+  [js_block] uid=6y4lo3hqxe9  title="其他费用"  js=657chars
+  [table] uid=c765larixkf  coll=nb_am_vehicle_costs  title="费用明细"
+    [col] remark
+    [js_column] uid=agsvka3v8du title="费用类型" js=308chars
+    [col] cost_date
+    [col] company
+    [col] cost_type
+    [col] amount
+    [col] operator
+    [col] vehicle
+    [addnew] uid=z9ilvn92s4k  popup=nb_am_vehicle_costs  mode=drawer  child_page=5kewozxk8lo
+      tab: New uid=pqcfveyvp78
+    [js_column] uid=zqhzp35wydc title="金额" js=371chars
+  [js_column] uid=agsvka3v8du  title="费用类型"  js=308chars
+  [form_create] uid=ewznr9tlxe5  coll=nb_am_vehicle_costs  events=[formValuesChange]
+  [js_column] uid=zqhzp35wydc  title="金额"  js=371chars
+  [js_block] uid=crmuyoqjy9p  title="费用类型分布"  js=595chars
+  [js_block] uid=gyezkmb1jwk  title="保养维修费"  js=660chars
+  [js_block] uid=ra1xt1ly68g  title="年度总费用"  js=587chars
+  [js_block] uid=uif43vm5gs5  title="公里平均费用"  js=598chars
+  [js_block] uid=vnyrnrkgyry  title="单车费用排名"  js=603chars
+
+## 基础数据 > 公司管理
+   page_uid: 4oopdm3z091  route: 350550571155461
+  [table] uid=kun8mlfjioj  coll=nb_am_companies  title="公司列表"
+    [col] contact_phone
+    [col] code
+    [col] status
+    [col] short_code
+    [col] contact_person
+    [col] company_type
+    [col] name
+    [col] sort
+    [addnew] uid=xnzksfafwss  popup=nb_am_companies  mode=drawer  child_page=tz7wdmnshea
+      tab: New uid=bgxq07k2n0n
+  [form_edit] uid=3kdpfc8l95q  coll=nb_am_companies
+  [form_create] uid=luiggsp5qfc  coll=nb_am_companies  events=[formValuesChange]
+
+## 基础数据 > 部门管理
+   page_uid: 79lnrubvn84  route: 350550571155463
+  [table] uid=if710hpvxyg  coll=nb_am_departments  title="部门列表"
+    [col] sort
+    [col] name
+    [col] code
+    [addnew] uid=gw0hw48gve6  popup=nb_am_departments  mode=drawer  child_page=v5przmyjmj2
+      tab: New uid=8q6iesedjtx
+    [col] manager
+    [col] company
+  [form_create] uid=78jhzmq1ftc  coll=nb_am_departments
+  [form_edit] uid=hixh7vczj0s  coll=nb_am_departments
+
+## 基础数据 > 场所管理
+   page_uid: hur1mic9ylv  route: 350550571155465
+  [table] uid=n4ilqtqn5a4  coll=nb_am_locations  title="场所列表"
+    [col] company
+    [addnew] uid=a9je94z5wfi  popup=nb_am_locations  mode=drawer  child_page=xonicytvq5b
+      tab: New uid=jlp0yy4548e
+    [col] sort
+    [col] name
+    [col] address
+    [col] location_type
+    [col] resident_count
+    [col] status
+  [form_create] uid=p2ps4kbfobr  coll=nb_am_locations
+  [form_edit] uid=67o106blv7w  coll=nb_am_locations
+
+## 基础数据 > 供应商管理
+   page_uid: rsn6wmhp2r6  route: 350550571155467
+  [table] uid=96utz89w215  coll=nb_am_suppliers  title="供应商列表"
+    [col] contact_phone
+    [col] supply_type
+    [col] contact_person
+    [col] cooperation_status
+    [addnew] uid=sx7ed33z9en  popup=nb_am_suppliers  mode=drawer  child_page=5da45ho6a99
+      tab: New uid=ts4i9gu0xub
+    [col] name
+  [form_edit] uid=v50i9zgrus6  coll=nb_am_suppliers
+  [form_create] uid=elj01khy9gy  coll=nb_am_suppliers  events=[formValuesChange]
+
+## 资产行政管理 > 系统设置
+   page_uid: abn3zoftwll  route: 350550571155469
+  [table] uid=cu8r01f4tlv  coll=nb_am_asset_categories  title="资产分类"
+    [col] sort
+    [col] default_years
+    [col] code
+    [addnew] uid=if0b9n0uyc8  popup=nb_am_asset_categories  mode=drawer  child_page=ol85llwlo0m
+      tab: New uid=isd7dnxryzr
+    [col] name
+  [form_create] uid=hdn8ngxynf4  coll=nb_am_asset_categories
+
+## 资产行政管理 > 系统设置
+   page_uid: yppximzvan8  route: 350550571155470
+  [table] uid=5jpdnluwckn  coll=nb_am_consumable_categories  title="易耗品分类"
+    [col] sort
+    [addnew] uid=g40doiacf50  popup=nb_am_consumable_categories  mode=drawer  child_page=j667ni9r12f
+      tab: New uid=aabiy5cqw93
+    [col] remark
+    [col] need_approval
+    [col] name
+  [form_create] uid=byktgdrops4  coll=nb_am_consumable_categories
+
+## 客户管理 > 客户列表
+   page_uid: ij1t44mvcgr  route: 350778485440514
+  [js_block] uid=4ln9fvz4t5x  title="已签约"  js=622chars
+  [js_block] uid=fmau3n5jz54  title="客户总数"  js=565chars
+  [js_block] uid=q1n5ejrbm4e  title="本月新增"  js=582chars
+  [js_block] uid=yj40biy0qo4  title="跟进中"  js=622chars
+
+## 客户管理 > 线索管理
+   page_uid: i3aqfoh76en  route: 350778485440518
+  [js_block] uid=2qoydq2ugb8  title="总数"  js=557chars
+  [js_block] uid=3anwf9wro8t  title="已转化"  js=618chars
+  [js_block] uid=bqtmt1oww8p  title="跟进中"  js=618chars
+  [js_block] uid=c4l7341g8fq  title="新线索"  js=618chars
+
+## 销售管理 > 商机管理
+   page_uid: i8v6imrmwxs  route: 350778493829122
+  [js_block] uid=17td2jsrah3  title="跟进中"  js=631chars
+  [js_block] uid=b7qbw8m1bf0  title="商机总数"  js=569chars
+  [js_block] uid=jxl47e3qdc6  title="总金额"  js=584chars
+  [js_block] uid=zj1cqsx1a1h  title="赞单数"  js=619chars
+
+## 合同回款 > 合同管理
+   page_uid: 17s0cnxhbn4  route: 350778500120578
+  [js_block] uid=e1gp8ke94v9  title="执行中"  js=622chars
+  [js_block] uid=hwcavaeq3nr  title="合同总额"  js=582chars
+  [js_block] uid=jk9grv6ffln  title="已回款"  js=580chars
+  [js_block] uid=y76hplwg6rx  title="合同总数"  js=565chars
+
+## 服务支持 > 服务工单
+   page_uid: 2i9ffutckqp  route: 350778508509186
+  [js_block] uid=h1hkonyoaz0  title="已解决"  js=620chars
+  [js_block] uid=ipswudoqwik  title="工单总数"  js=563chars
+  [js_block] uid=pqzmezgj4c2  title="处理中"  js=620chars
+  [js_block] uid=s38otdrrve0  title="待处理"  js=620chars
+
+## 基础设置 > 教师管理
+   page_uid: jlrqh6b4dhj  route: 350887956774913
+  [js_block] uid=10mu6z70a2n  title="副教授"  js=620chars
+  [js_block] uid=dx1ps6ihsli  title="教师总数"  js=564chars
+  [js_block] uid=kygsgg5scci  title="在职"  js=613chars
+  [js_block] uid=uh7mf603a1a  title="教授"  js=612chars
+
+## 课程中心 > 课程管理
+   page_uid: ac0pkvby9wj  route: 350887958872065
+  [js_block] uid=653abo7udp7  title="开课中"  js=620chars
+  [js_block] uid=ehm6820fgyl  title="课程总数"  js=563chars
+  [js_block] uid=qsbpmuznabd  title="筹备中"  js=620chars
+
+## 学员中心 > 学员管理
+   page_uid: p3a2mclk869  route: 350887963066369
+  [js_block] uid=f84s2kglnp2  title="在读"  js=613chars
+  [js_block] uid=s5t371jyscm  title="学员总数"  js=564chars
+  [js_block] uid=uxirmjfp96w  title="毕业"  js=613chars
+  [js_block] uid=vt7x33xrlhm  title="本学期新生"  js=636chars
+
+## 考试成绩 > 考试管理
+   page_uid: ucldeela5b8  route: 350887967260673
+  [js_block] uid=17331zdfwky  title="已完成"  js=618chars
+  [js_block] uid=pvc7mh7zkkl  title="计划中"  js=618chars
+  [js_block] uid=wm612xzh358  title="考试总数"  js=561chars
+
+## 组织人事 > 员工花名册
+   page_uid: n85er9eh3r5  route: 350888611086337
+  [js_block] uid=5ribs9dqwd0  title="试用期"  js=621chars
+  [js_block] uid=gg5ka4e9h2k  title="本月入职"  js=628chars
+  [js_block] uid=h3st4azbn5b  title="在职"  js=613chars
+  [js_block] uid=oojlyioo3va  title="员工总数"  js=564chars
+
+## 考勤管理 > 请假管理
+   page_uid: 8o2vbx3bprf  route: 350888619474945
+  [js_block] uid=23aal1vx4qc  title="年假使用"  js=618chars
+  [js_block] uid=7yv00x4r3su  title="病假使用"  js=618chars
+  [js_block] uid=dbh0p97thoe  title="待审批"  js=618chars
+  [js_block] uid=vg118vasz8n  title="本月请假"  js=626chars
+
+## 薪酬福利 > 薪资发放
+   page_uid: 4k7sr22n4qm  route: 350888621572099
+  [js_block] uid=05xpqswlogh  title="平均薪资"  js=579chars
+  [js_block] uid=0fpw8kexz6j  title="总金额"  js=577chars
+  [js_block] uid=j0iomrsbloo  title="待确认"  js=613chars
+  [js_block] uid=xyleldugwld  title="本月发放"  js=562chars
+
+## 招聘培训 > 招聘管理
+   page_uid: twtmdd51a1f  route: 350888625766401
+  [js_block] uid=26cb0lbkgud  title="已入职"  js=581chars
+  [js_block] uid=8afzgjb05bw  title="招聘中"  js=623chars
+  [js_block] uid=b290tkum294  title="总候选人"  js=583chars
+  [js_block] uid=djkyvveia4l  title="已录用"  js=581chars
+
+## 搭建看板
+   page_uid: 0t2e5f3rlvk  route: 350893786857473
+  [js_block] uid=lb9a857e0cl  title="搭建看板"  js=13505chars
+
+## 资产管理 > 资产台账
+   page_uid: 4j3frbmz8ul  route: 350904268423170
+  [js_block] uid=3o6z6blf0zt  title="各部门资产价值"  js=2557chars
+  [table] uid=kqsde73nzg5  coll=nb_am_assets  title="资产台账"
+    [col] status
+    [col] purchase_price
+    [col] asset_code
+    [col] purchase_date
+    [col] name
+  [table] uid=onye2873y59  coll=nb_am_asset_transfers  title="领用记录"
+  [table] uid=wdcd4prk5q6  coll=nb_am_asset_transfers  title="领用记录"
+    [col] status
+    [col] applicant
+    [col] createdAt
+    [col] transfer_type
+  [detail] uid=s463bijpo5g  coll=nb_am_assets
+  [js_item] uid=lbvuoslzl0j  js=4251chars
+  [js_block] uid=p8cauh5lvot  title="资产状态分布"  js=2232chars
+
+## 资产管理 > 采购申请
+   page_uid: u3y7x8zh26b  route: 350904268423172
+  [table] uid=yeg39mto7j8  coll=nb_am_purchase_requests  title="采购申请"
+    [col] status
+    [col] quantity
+    [col] reason
+    [addnew] uid=mju9erez7b4  popup=nb_am_purchase_requests  mode=drawer  child_page=6q0alx9dwew
+      tab: New uid=es9dsafs1va
+    [col] asset_name
+    [col] applicant
+    [col] estimated_price
+    [col] total_price
+  [form_create] uid=dwjqzt855y5  coll=nb_am_purchase_requests  events=[formValuesChange, formValuesChange, formValuesChange, beforeRender]
+  [form_create] uid=73uhnmdk0mj  coll=nb_am_purchase_requests
+
+## Templates
+  [popup] IT Support                                model=AddNewActionModel  coll=nb_tts_tickets  target=69qi6zbdstn
+  [block] Form (Edit): Tts Tickets                  model=EditFormModel  coll=nb_tts_tickets  target=16cb8014363
+  [block] Form (Edit): Tts Customers-simple         model=EditFormModel  coll=nb_tts_customers  target=9cpjopu2w5z
+  [block] Mail messages (All): Mail messages        model=MailMessagesBlockModel  coll=mailMessages  target=eb01b150bce
+  [block] Form (Add new): Tts Tickets               model=CreateFormModel  coll=nb_tts_tickets  target=bd0ab3d0fe7
+  [block] Form (Add new): Tts Ratings               model=CreateFormModel  coll=nb_tts_ratings  target=8nzjbuzev4r
+  [popup] Consultation                              model=AddNewActionModel  coll=nb_tts_tickets  target=c2128xf8flk
+  [block] Table: All Tts Tickets (Admin)            model=TableBlockModel  coll=nb_tts_tickets  target=e4a75322e1a
+  [block] Form (Add new): Tts Tickets - Complaint   model=CreateFormModel  coll=nb_tts_tickets  target=nax9o3mpe9k
+  [popup] Add new Tickets                           model=AddNewActionModel  coll=nb_tts_tickets  target=kkh2ahomw9l
+  [popup] Ticket Page                               model=DisplayTextFieldModel  coll=nb_tts_tickets  target=pqh3ewompv0
+  [popup] Customer Information                      model=PopupActionModel  coll=nb_tts_customers  target=25rgpju66q3
+  [popup] Complaint                                 model=AddNewActionModel  coll=nb_tts_tickets  target=yxi30kaiffd
+  [block] Form (Add new): Tts Tickets - Equipment Repair  model=CreateFormModel  coll=nb_tts_tickets  target=hl0crlc8uh6
+  [popup] Equipment Repair                          model=AddNewActionModel  coll=nb_tts_tickets  target=r7auxytl68z
+  [popup] Contact Name                              model=DisplayTextFieldModel  coll=nb_tts_customer_contacts  target=1fdqqvcx95x
+  [block] Table: Tts Tickets (simple)               model=TableBlockModel  coll=nb_tts_tickets  target=5c55b4f87fa

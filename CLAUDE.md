@@ -3,9 +3,10 @@
 ## What This Repo Does
 
 This repo lets AI agents operate NocoBase through MCP tools + Skills knowledge.
-- **MCP Server** (mcp-server/) — 48 atomic API tools
-- **Skills** (skills/) — workflow guides for data modeling, page building, AI employees
-- **Examples** (examples/) — complete demo systems with scripts
+- **MCP Server** (mcp-server/) — 55 API tools (atomic + batch)
+- **Skills** (skills/) — 4 workflow guides (data modeling, page building, workflow, AI employee)
+- **Examples** (examples/) — 5 agent-buildable system prompts + scripted Asset Management demo
+- **Guide** (docs/guide.md) — complete usage guide with troubleshooting
 
 ## Quick Start for Agents
 
@@ -36,13 +37,13 @@ cd mcp-server
 pip install -e .
 ```
 
-Configure `.mcp.json` in your project (see `.mcp.json.example`).
+Configure `.mcp.json` in your project (see `.mcp.json.example` or README.md).
 
 ### 4. Skills
 
 Skills are knowledge files that guide AI to use MCP tools correctly:
 - `skills/nocobase-data-modeling/skill.md` — SQL → register → sync → upgrade → relations
-- `skills/nocobase-page-building/skill.md` — menu → layout → blocks → forms → popups
+- `skills/nocobase-page-building/skill.md` — menu → layout → blocks → forms → popups → JS
 - `skills/nocobase-workflow/skill.md` — Workflow triggers, conditions, data ops, scheduling
 - `skills/nocobase-ai-employee/skill.md` — AI employee CRUD + page integration
 
@@ -96,14 +97,36 @@ Always: GET → deep merge → PUT. Never send partial data.
 - **Page**: `nb_create_page()` — actual content (tables, forms, etc.)
 - Groups contain pages. Pages cannot contain pages.
 
+### Field Validation (v2)
+`nb_page_builder` and MCP tools now soft-validate field names:
+- Warns if a field doesn't exist in the collection
+- Suggests similar field names (fuzzy match)
+- Use `nb_fields("collection_name")` to check available fields before building forms
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Agent stops mid-build | Check `notes.md`, continue in interactive mode from the last phase |
+| "Field may have been deleted" | Field name mismatch — use `nb_fields()` to check, fix with `nb_patch_field` or `nb_remove_field` |
+| `nb_crud_page` fails | **Don't fall back to individual tools**. Fix params (DSL vs JSON format) and retry |
+| Table render error | `nb_clean_tab` + `nb_crud_page` to rebuild the page |
+| Workflow not triggering | Check `nb_list_workflows` — may need `nb_enable_workflow` |
+| Want to start over | `nb_clean_prefix("prefix_")` + delete menu group in UI |
+
+See `docs/guide.md` for the full troubleshooting guide.
+
 ## File Reference
 
 | Path | Purpose |
 |------|---------|
-| `mcp-server/` | MCP server with 41 tools |
-| `skills/` | 3 skill knowledge files |
-| `examples/asset-management/` | Complete AM demo (8 scripts) |
-| `examples/asset-management/nb_page_builder.py` | Reusable page builder library |
+| `mcp-server/` | MCP server with 55 tools across 7 modules |
+| `skills/` | 4 skill knowledge files |
+| `examples/prompts/` | 5 system prompts (CRM, HRM, EDU, ITSM, WMS) + CLAUDE.md template |
+| `examples/asset-management/` | Complete AM demo (8 build scripts + 2 utility scripts) |
+| `examples/asset-management/nb_page_builder.py` | Reusable page builder library (with field validation) |
 | `examples/asset-management/nb_workflow_builder.py` | Reusable workflow builder library |
-| `examples/asset-management/nb-setup.py` | Base NocoBase client + collection tools |
+| `examples/asset-management/nb-save-templates.py` | Auto-save all popup templates |
+| `examples/asset-management/nb-block-registry.py` | Generate block mapping registry for AI |
+| `docs/guide.md` | Complete usage guide with troubleshooting |
 | `docs/api-patterns.md` | API research notes |

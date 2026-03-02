@@ -177,8 +177,10 @@ class NB:
         self.s.trust_env = False
         self.created = 0
         self.errors = []
+        self.warnings = []
         self._field_cache = {}
         self._title_cache = {}
+        self._coll_title_cache = {}
         self._sort_counters = {}  # parent_uid → next sort index
         if auto_login:
             self.login()
@@ -198,16 +200,51 @@ class NB:
         self._field_cache[coll] = {
             f["name"]: {"interface": f.get("interface", "input"),
                         "type": f.get("type", "string"),
-                        "target": f.get("target", "")}
+                        "target": f.get("target", ""),
+                        "title": f.get("uiSchema", {}).get("title", f["name"])}
             for f in r.json().get("data", [])
         }
         if not self._title_cache:
             r2 = self.s.get(f"{self.base}/api/collections:list?paginate=false")
             for c in r2.json().get("data", []):
                 self._title_cache[c["name"]] = c.get("titleField") or "name"
+                self._coll_title_cache[c["name"]] = c.get("title", c["name"])
+
+    def _visible_fields(self, coll):
+        """Return user-visible field names (skip internal f_xxx, *Id, sort, id)."""
+        schema = self._field_cache.get(coll, {})
+        skip = {"id", "sort", "createdById", "updatedById"}
+        return [f for f in schema
+                if f not in skip
+                and not f.startswith("f_")
+                and not f.endswith("Id")
+                and schema[f].get("interface") not in ("createdBy", "updatedBy")]
+
+    def _check_field(self, coll, field):
+        """Soft-validate field exists. Warns if not found, suggests similar names."""
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        if not schema or field in schema:
+            return True
+        visible = self._visible_fields(coll)
+        # Find similar: substring match or shared prefix/suffix
+        similar = [f for f in visible if field in f or f in field]
+        if not similar and len(field) >= 3:
+            similar = [f for f in visible
+                       if f[:3] == field[:3] or f[-4:] == field[-4:]]
+        coll_label = self._coll_title_cache.get(coll, coll)
+        if similar:
+            hint = f" maybe: {similar}"
+        else:
+            hint = f" ({len(visible)} fields — use nb.fields('{coll}') to see all)"
+        msg = f"⚠️  '{field}' not in {coll_label}({coll}).{hint}"
+        print(msg)
+        self.warnings.append(msg)
+        return False
 
     def _iface(self, coll, field):
         self._load_meta(coll)
+        self._check_field(coll, field)
         return self._field_cache.get(coll, {}).get(field, {}).get("interface", "input")
 
     def _target(self, coll, field):
@@ -216,7 +253,43 @@ class NB:
 
     def _label(self, target_coll):
         self._load_meta(target_coll)
-        return self._title_cache.get(target_coll, "name")
+        tf = self._title_cache.get(target_coll)
+        if tf and tf != "id":
+            schema = self._field_cache.get(target_coll, {})
+            if not schema or tf in schema:
+                return tf
+        schema = self._field_cache.get(target_coll, {})
+        for candidate in ("name", "title", "label", "subject", "code"):
+            if candidate in schema and schema[candidate].get("interface") in ("input", "sequence"):
+                return candidate
+        for fname, fmeta in schema.items():
+            if (fmeta.get("interface") in ("input", "sequence")
+                    and fname not in ("id",) and not fname.endswith("Id")):
+                return fname
+        return "id"
+
+    def fields(self, coll, all=False):
+        """Print collection schema — handy for agents to check available fields.
+
+        Usage:
+            nb.fields("nb_am_purchase_requests")       # user-visible fields only
+            nb.fields("nb_am_purchase_requests", all=True)  # include internal fields
+        """
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        visible = sorted(schema.keys()) if all else self._visible_fields(coll)
+        coll_label = self._coll_title_cache.get(coll, coll)
+        print(f"\n  {coll_label} ({coll}) — {len(visible)} fields")
+        for name in sorted(visible):
+            meta = schema[name]
+            iface = meta.get("interface", "?")
+            title = meta.get("title", "")
+            target = meta.get("target", "")
+            line = f"    {name:30s}  {iface:12s}  {title}"
+            if target:
+                line += f"  → {target}"
+            print(line)
+        return sorted(visible)
 
     def _next_sort(self, parent):
         """Auto-increment sort index per parent. Resets on new page_layout()."""
@@ -1381,6 +1454,13 @@ ctx.render(ctx.React.createElement(Space, {{ wrap: true }},
     # ── Summary ─────────────────────────────────────────────────
 
     def summary(self):
-        print(f"\n✅ Created {self.created} nodes, {len(self.errors)} errors")
+        print(f"\n✅ Created {self.created} nodes", end="")
+        if self.errors:
+            print(f", {len(self.errors)} errors", end="")
+        if self.warnings:
+            print(f", {len(self.warnings)} warnings", end="")
+        print()
         for e in self.errors[:10]:
             print(f"  ❌ {e}")
+        for w in self.warnings[:10]:
+            print(f"  {w}")

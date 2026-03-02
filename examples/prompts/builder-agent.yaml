@@ -1,0 +1,9 @@
+version: 1
+agent:
+  name: nocobase-builder
+  extend: default
+  system_prompt_path: ./CLAUDE.md
+  subagents:
+    html-analyzer:
+      path: ./html-analyzer-sub.yaml
+      description: "Reads an HTML prototype file and returns a structured layout analysis: grid structure, block positions, KPI card placement, sidebar vs full-width patterns. Use this instead of reading HTML files directly to save context."

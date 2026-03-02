@@ -432,21 +432,26 @@ def register_tools(mcp: FastMCP):
         Event flows run JavaScript code in response to UI events on a block.
 
         Args:
-            model_uid: UID of the FlowModel to attach the event flow to
-                       (e.g., CreateFormModel, EditFormModel, TableBlockModel)
+            model_uid: UID of the form FlowModel to attach to.
+                       Must be CreateFormModel or EditFormModel UID — NOT action UIDs.
+                       Get this from nb_crud_page result "create_form" or "edit_form" field.
             event_name: Event name to listen for. Common events:
                         - "formValuesChange" — form field value changes
                         - "beforeRender" — block initialization
                         - "afterSubmit" — after form submission
-            code: JavaScript code to execute. Has access to ctx.form, ctx.model,
-                  ctx.api, ctx.record, etc.
+            code: JavaScript code. Has access to ctx.form, ctx.model, ctx.api.
+                  Read values:  ctx.form?.values || {}
+                  Set values:   ctx.form.setFieldsValue({field: value})
+                  Query field:  ctx.form.query('field').take()
+                  Current user: ctx.model?.currentUser?.nickname (NOT ctx.currentUser)
+                  Always wrap in: (async () => { ... })();
 
         Returns:
             JSON with flow_key.
 
         Example:
-            nb_event_flow("form123", "formValuesChange",
-                "const v = ctx.form?.values || {}; if (v.qty && v.price) ctx.form.setFieldsValue({total: v.qty * v.price});")
+            nb_event_flow("createFormUid", "formValuesChange",
+                "(async()=>{const v=ctx.form?.values||{};if(v.qty&&v.price)ctx.form.setFieldsValue({total:v.qty*v.price});})();")
         """
         nb = get_nb_client()
         flow_key = nb.event_flow(model_uid, event_name, code)
@@ -464,12 +469,12 @@ def register_tools(mcp: FastMCP):
         kpis_json: Optional[list] = None,
         detail_json: Optional[list] = None,
         table_title: Optional[str] = None,
+        sidebar_outlines: Optional[list] = None,
     ) -> str:
         """Build a complete CRUD page in one call — layout + KPIs + filter + table + forms + popup.
 
-        This is a high-level tool that combines nb_page_layout, nb_kpi_block,
-        nb_filter_form, nb_table_block, nb_addnew_form, nb_edit_action,
-        nb_set_layout, and nb_detail_popup into a single operation.
+        Uses tree-based builder: constructs entire page in memory, then submits
+        via a single flowModels:save call (4-5 HTTP calls instead of 70-80).
 
         Args:
             tab_uid: Tab UID from nb_create_page or nb_create_menu
@@ -505,9 +510,19 @@ def register_tools(mcp: FastMCP):
                 or a different layout from the edit form.
                 Set to "none" to explicitly skip detail popup creation.
             table_title: Optional title text displayed above the table card.
+            sidebar_outlines: Optional list of outline definitions to place in a
+                sidebar column next to the table (Dashboard-style layout).
+                Each item: {"title": "Name", "ctx_info": {"type": "...", ...}}
+                When provided, layout changes from:
+                  [Table span=24]
+                to:
+                  [Table span=15] [Outline blocks span=9]
+                This creates a rich Dashboard-style layout. Outlines are vertically
+                stacked in the sidebar. Their UIDs are returned in the result.
+                Example: [{"title":"客户分布","ctx_info":{"type":"distribution","collection":"nb_crm_customers","group_by":"industry"}}]
 
         Returns:
-            JSON with grid_uid, table_uid, and counts of created elements.
+            JSON with grid_uid, table_uid, create_form, edit_form, node_count.
 
         Example:
             nb_crud_page("tab123", "nb_crm_customers",
@@ -515,83 +530,155 @@ def register_tools(mcp: FastMCP):
                 '--- 基本信息\\nname* | code\\ncustomer_type | industry\\nstatus | level\\n--- 联系方式\\nphone | email\\naddress',
                 filter_fields='["name","status","industry"]',
                 kpis_json='[{"title":"客户总数"},{"title":"已签约","filter":{"status":"已签约"},"color":"#52c41a"}]',
-                detail_json='[{"title":"客户详情","fields":"name | code\\nstatus | level\\nindustry | scale"}]')
+                sidebar_outlines=[{"title":"客户行业分布","ctx_info":{"type":"distribution","collection":"nb_crm_customers","group_by":"industry","display":"pie"}}])
         """
+        from ..tree_builder import TreeBuilder
+
         nb = get_nb_client()
-        result = {}
-        element_count = 0
 
-        # Step 1: Layout
-        grid = nb.page_layout(tab_uid)
-        result["grid_uid"] = grid
-        element_count += 1
-
-        # Step 2: KPIs
-        kpi_uids = []
-        if kpis_json:
-            kpis = safe_json(kpis_json)
-            for kpi in kpis:
-                ktitle = kpi.get("title", "Count")
-                kfilter = kpi.get("filter")  # pass dict directly, kpi() handles serialization
-                kcolor = kpi.get("color")
-                ku = nb.kpi(grid, ktitle, collection, filter_=kfilter, color=kcolor)
-                kpi_uids.append(ku)
-                element_count += 1
-
-        # Step 3: Table
+        # Parse inputs
         cols = safe_json(table_fields)
-        tbl_uid, addnew_uid, actcol_uid = nb.table_block(
-            grid, collection, cols, first_click=True, title=table_title
+        kpis = safe_json(kpis_json) if kpis_json else None
+        ff = safe_json(filter_fields) if filter_fields else None
+        detail = safe_json(detail_json) if detail_json and detail_json != "none" else detail_json
+        outlines = safe_json(sidebar_outlines) if sidebar_outlines else None
+
+        # Clean existing content
+        nb.clean_tab(tab_uid)
+
+        # Build tree in memory (0 HTTP for construction, only metadata queries)
+        tb = TreeBuilder(nb)
+        root, meta = tb.crud_page(
+            tab_uid=tab_uid,
+            coll=collection,
+            table_fields=cols,
+            form_fields_dsl=form_fields,
+            filter_fields=ff,
+            kpis=kpis,
+            detail_tabs=detail,
+            table_title=table_title,
+            sidebar_outlines=outlines,
         )
-        result["table_uid"] = tbl_uid
-        element_count += 1
 
-        # Step 4: Filter
-        filter_uid = None
-        if filter_fields:
-            ff = safe_json(filter_fields)
-            first_field = ff[0] if ff else "name"
-            fb, _fi = nb.filter_form(grid, collection, first_field,
-                                     target_uid=tbl_uid, search_fields=ff)
-            filter_uid = fb
-            element_count += 1
+        # Single POST to create entire tree
+        filter_manager = meta.pop("_filter_manager", None)
+        nb.save_tree(root, tab_uid, filter_manager=filter_manager)
 
-        # Step 5: AddNew form
-        nb.addnew_form(addnew_uid, collection, form_fields)
-        element_count += 1
-
-        # Step 6: Edit form
-        nb.edit_action(actcol_uid, collection, form_fields)
-        element_count += 1
-
-        # Step 7: Layout arrangement
-        rows = []
-        if kpi_uids:
-            span = 24 // len(kpi_uids) if kpi_uids else 24
-            rows.append([[ku, span] for ku in kpi_uids])
-        if filter_uid:
-            rows.append([[filter_uid]])
-        rows.append([[tbl_uid]])
-        nb.set_layout(grid, rows)
-        element_count += 1
-
-        # Step 8: Detail popup
-        # When detail_json is omitted, auto-generate from form_fields DSL
-        # (same layout as Edit form, minus required markers).
-        # This ensures every page has a meaningful detail popup — agents
-        # don't need to specify detail_json unless they want sub-tabs or
-        # sub-tables beyond the main detail fields.
-        click_uid = nb.find_click_field(tbl_uid, cols[0])
-        if click_uid:
-            if detail_json and detail_json != "none":
-                tabs = safe_json(detail_json)
-            else:
-                # Strip required markers (* and :N widths are kept for layout)
-                detail_fields = form_fields.replace("*", "")
-                tabs = [{"title": "详情", "fields": detail_fields}]
-            nb.detail_popup(click_uid, collection, tabs, mode="drawer", size="large")
-            element_count += 1
+        # Build result (same format as before for backward compatibility)
+        result = {
+            "grid_uid": meta.get("grid_uid"),
+            "table_uid": meta.get("table_uid"),
+            "create_form": meta.get("create_form"),
+            "edit_form": meta.get("edit_form"),
+            "node_count": meta.get("node_count", 0),
+        }
+        if meta.get("detail_popup"):
             result["detail_popup"] = True
+        if meta.get("sidebar_outline_uids"):
+            result["sidebar_outline_uids"] = meta["sidebar_outline_uids"]
+        if nb.warnings:
+            result["warnings"] = nb.warnings
 
-        result["elements_created"] = element_count
         return json.dumps(result)
+
+    @mcp.tool()
+    def nb_crud_page_file(file_path: str) -> str:
+        """Build multiple CRUD pages from a JSON file — avoids tool-call parameter limits.
+
+        Write a JSON file with an array of page definitions, then call this tool
+        with the file path. Each page definition has the same parameters as
+        nb_crud_page.
+
+        Args:
+            file_path: Path to a JSON file containing an array of page definitions.
+                Each item: {
+                    "tab_uid": "...",
+                    "collection": "...",
+                    "table_fields": ["name","code","status","createdAt"],
+                    "form_fields": "--- Basic\\nname* | code\\nstatus",
+                    "filter_fields": ["name","status"],       // optional
+                    "kpis_json": [{"title":"Total"}],         // optional
+                    "detail_json": [...],                     // optional
+                    "table_title": "...",                     // optional
+                    "sidebar_outlines": [                     // optional — Dashboard-style
+                      {"title":"Status Distribution",
+                       "ctx_info":{"type":"distribution","collection":"xxx","group_by":"status"}}
+                    ]
+                }
+                Note: table_fields can be a JSON array (not a string).
+                form_fields is a DSL string (use \\n for newlines).
+                sidebar_outlines creates outline blocks in a sidebar column (span=9)
+                next to the table (span=15), giving a Dashboard-style layout.
+
+        Returns:
+            JSON with results for each page (grid_uid, table_uid, create_form, edit_form,
+            sidebar_outline_uids if sidebar_outlines was provided).
+
+        Example file content:
+            [
+              {
+                "tab_uid": "abc123",
+                "collection": "nb_crm_customers",
+                "table_fields": ["name","phone","status","industry","createdAt"],
+                "form_fields": "--- 基本信息\\nname* | phone\\nindustry | status\\n--- 备注\\nremark",
+                "filter_fields": ["name","status"],
+                "kpis_json": [{"title":"客户总数"},{"title":"已签约","filter":{"status":"已签约"},"color":"#52c41a"}],
+                "sidebar_outlines": [
+                  {"title":"客户行业分布","ctx_info":{"type":"distribution","collection":"nb_crm_customers","group_by":"industry","display":"pie"}},
+                  {"title":"客户等级分析","ctx_info":{"type":"distribution","collection":"nb_crm_customers","group_by":"level"}}
+                ]
+              },
+              {
+                "tab_uid": "def456",
+                "collection": "nb_crm_contacts",
+                "table_fields": ["name","phone","email","position","createdAt"],
+                "form_fields": "name* | phone\\nemail | position\\ncustomer"
+              }
+            ]
+        """
+        import os
+        if not os.path.isfile(file_path):
+            return json.dumps({"error": f"File not found: {file_path}"})
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            pages = json.load(f)
+
+        if not isinstance(pages, list):
+            return json.dumps({"error": "File must contain a JSON array of page definitions"})
+
+        results = []
+        for i, page in enumerate(pages):
+            try:
+                tab = page.get("tab_uid", "")
+                coll = page.get("collection", "")
+                tf = page.get("table_fields", [])
+                ff = page.get("form_fields", "")
+                if not tab or not coll or not tf or not ff:
+                    results.append({"index": i, "error": "Missing required fields (tab_uid, collection, table_fields, form_fields)"})
+                    continue
+
+                # Normalize table_fields: accept both list and JSON string
+                if isinstance(tf, list):
+                    tf = json.dumps(tf)
+
+                r = nb_crud_page(
+                    tab_uid=tab,
+                    collection=coll,
+                    table_fields=tf,
+                    form_fields=ff,
+                    filter_fields=page.get("filter_fields"),
+                    kpis_json=page.get("kpis_json"),
+                    detail_json=page.get("detail_json"),
+                    table_title=page.get("table_title"),
+                    sidebar_outlines=page.get("sidebar_outlines"),
+                )
+                parsed = json.loads(r)
+                parsed["index"] = i
+                parsed["collection"] = coll
+                results.append(parsed)
+            except Exception as e:
+                results.append({"index": i, "collection": coll, "error": str(e)})
+
+        return json.dumps({"pages_built": len([r for r in results if "error" not in r]),
+                          "pages_failed": len([r for r in results if "error" in r]),
+                          "results": results})

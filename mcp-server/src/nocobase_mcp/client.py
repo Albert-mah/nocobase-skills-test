@@ -17,36 +17,7 @@ from typing import Any, Optional
 import requests
 
 from .utils import uid, deep_merge
-
-# ── Interface -> Model mappings (used by page building tools) ──────────
-
-DISPLAY_MAP = {
-    "input": "DisplayTextFieldModel", "textarea": "DisplayTextFieldModel",
-    "email": "DisplayTextFieldModel", "phone": "DisplayTextFieldModel",
-    "sequence": "DisplayTextFieldModel", "markdown": "DisplayTextFieldModel",
-    "select": "DisplayEnumFieldModel", "radioGroup": "DisplayEnumFieldModel",
-    "checkbox": "DisplayCheckboxFieldModel",
-    "integer": "DisplayNumberFieldModel", "number": "DisplayNumberFieldModel",
-    "percent": "DisplayNumberFieldModel", "sort": "DisplayNumberFieldModel",
-    "date": "DisplayDateTimeFieldModel", "datetime": "DisplayDateTimeFieldModel",
-    "createdAt": "DisplayDateTimeFieldModel", "updatedAt": "DisplayDateTimeFieldModel",
-    "color": "DisplayColorFieldModel", "icon": "DisplayIconFieldModel",
-    "m2o": "DisplayTextFieldModel",
-    "o2m": "DisplayNumberFieldModel",
-}
-
-EDIT_MAP = {
-    "input": "InputFieldModel", "textarea": "TextareaFieldModel",
-    "email": "InputFieldModel", "phone": "InputFieldModel",
-    "markdown": "TextareaFieldModel",
-    "select": "SelectFieldModel", "radioGroup": "RadioGroupFieldModel",
-    "checkbox": "CheckboxFieldModel",
-    "integer": "NumberFieldModel", "number": "NumberFieldModel",
-    "percent": "NumberFieldModel",
-    "date": "DateOnlyFieldModel", "datetime": "DateTimeTzFieldModel",
-    "color": "InputFieldModel", "icon": "InputFieldModel",
-    "m2o": "RecordSelectFieldModel",
-}
+from .models import DISPLAY_MAP, EDIT_MAP
 
 
 # ── Interface -> uiSchema templates (for data modeling) ────────────────
@@ -377,8 +348,10 @@ class NB:
         self.s.trust_env = False
         self.created = 0
         self.errors = []
+        self.warnings = []
         self._field_cache = {}
         self._title_cache = {}
+        self._coll_title_cache = {}
         self._sort_counters = {}
         self._timeout = 30
         if auto_login:
@@ -428,16 +401,49 @@ class NB:
         self._field_cache[coll] = {
             f["name"]: {"interface": f.get("interface", "input"),
                         "type": f.get("type", "string"),
-                        "target": f.get("target", "")}
+                        "target": f.get("target", ""),
+                        "title": f.get("uiSchema", {}).get("title", f["name"])}
             for f in fields
         }
         if not self._title_cache:
             colls = self._get_json("api/collections:list?paginate=false") or []
             for c in colls:
                 self._title_cache[c["name"]] = c.get("titleField") or "name"
+                self._coll_title_cache[c["name"]] = c.get("title", c["name"])
+
+    def _visible_fields(self, coll):
+        """Return user-visible field names (skip internal f_xxx, *Id, sort, id)."""
+        schema = self._field_cache.get(coll, {})
+        skip = {"id", "sort", "createdById", "updatedById"}
+        return [f for f in schema
+                if f not in skip
+                and not f.startswith("f_")
+                and not f.endswith("Id")
+                and schema[f].get("interface") not in ("createdBy", "updatedBy")]
+
+    def _check_field(self, coll, field):
+        """Soft-validate field exists. Warns if not found, suggests similar names."""
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        if not schema or field in schema:
+            return True
+        visible = self._visible_fields(coll)
+        similar = [f for f in visible if field in f or f in field]
+        if not similar and len(field) >= 3:
+            similar = [f for f in visible
+                       if f[:3] == field[:3] or f[-4:] == field[-4:]]
+        coll_label = self._coll_title_cache.get(coll, coll)
+        if similar:
+            hint = f" maybe: {similar}"
+        else:
+            hint = f" ({len(visible)} fields — use nb.fields('{coll}') to list)"
+        msg = f"field '{field}' not in {coll_label}({coll}).{hint}"
+        self.warnings.append(msg)
+        return False
 
     def _iface(self, coll, field):
         self._load_meta(coll)
+        self._check_field(coll, field)
         return self._field_cache.get(coll, {}).get(field, {}).get("interface", "input")
 
     def _target(self, coll, field):
@@ -446,7 +452,44 @@ class NB:
 
     def _label(self, target_coll):
         self._load_meta(target_coll)
-        return self._title_cache.get(target_coll, "name")
+        tf = self._title_cache.get(target_coll)
+        if tf and tf != "id":
+            # Verify the titleField actually exists in the collection
+            schema = self._field_cache.get(target_coll, {})
+            if not schema or tf in schema:
+                return tf
+        # titleField missing or invalid — find a readable field
+        schema = self._field_cache.get(target_coll, {})
+        for candidate in ("name", "title", "label", "subject", "code"):
+            if candidate in schema and schema[candidate].get("interface") in ("input", "sequence"):
+                return candidate
+        # Last resort: first input field
+        for fname, fmeta in schema.items():
+            if (fmeta.get("interface") in ("input", "sequence")
+                    and fname not in ("id",) and not fname.endswith("Id")):
+                return fname
+        return "id"
+
+    def fields(self, coll, all_fields=False):
+        """Return collection field info for agents to inspect schema.
+
+        Returns list of visible field names. Also prints schema for debugging.
+        """
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        visible = sorted(schema.keys()) if all_fields else self._visible_fields(coll)
+        coll_label = self._coll_title_cache.get(coll, coll)
+        lines = [f"{coll_label} ({coll}) — {len(visible)} fields"]
+        for name in sorted(visible):
+            meta = schema[name]
+            iface = meta.get("interface", "?")
+            title = meta.get("title", "")
+            target = meta.get("target", "")
+            line = f"  {name:30s}  {iface:12s}  {title}"
+            if target:
+                line += f"  → {target}"
+            lines.append(line)
+        return "\n".join(lines)
 
     def _next_sort(self, parent):
         self._sort_counters.setdefault(parent, 0)
@@ -527,6 +570,45 @@ class NB:
         self._sort_counters.pop(tab_uid, None)
         self._invalidate_cache()
         return len(to_delete)
+
+    # ── Tree API (batch save / retrieve) ─────────────────────────
+
+    def save_tree(self, root, parent_uid: str,
+                  sub_key: str = "grid", sub_type: str = "object",
+                  filter_manager: Optional[list] = None) -> dict:
+        """Serialize a TreeNode tree and POST via flowModels:save.
+
+        Args:
+            root: TreeNode (from tree_builder) to serialize
+            parent_uid: UID of the parent FlowModel (e.g. tab UID)
+            sub_key: sub key for the root node (default "grid")
+            sub_type: sub type for the root node (default "object")
+            filter_manager: optional filterManager array for the root node
+
+        Returns:
+            API response data dict
+        """
+        payload = root.to_dict(parent_id=parent_uid, sub_key=sub_key, sub_type=sub_type)
+        if filter_manager:
+            payload["filterManager"] = filter_manager
+        r = self._post("api/flowModels:save", json=payload)
+        if r.ok:
+            data = r.json().get("data", {})
+            self._invalidate_cache()
+            return data
+        raise APIError(r.status_code, r.text[:500], f"{self.base}/api/flowModels:save")
+
+    def get_tree(self, parent_uid: str, sub_key: str = "grid") -> Optional[dict]:
+        """GET complete FlowModel tree with nested subModels.
+
+        Returns:
+            Full tree dict with recursive subModels, or None if not found.
+        """
+        r = self._get(f"api/flowModels:findOne",
+                      params={"parentId": parent_uid, "subKey": sub_key})
+        if r.ok:
+            return r.json().get("data")
+        return None
 
     # ── Auto-infer primitives ───────────────────────────────────
 
@@ -904,9 +986,22 @@ class NB:
         return self.save("BlockGridModel", tab_uid, "grid", "object")
 
     def set_layout(self, grid_uid: str, rows_spec: list) -> None:
-        """Set gridSettings on an existing BlockGridModel. Also writes filterManager."""
+        """Set gridSettings on an existing BlockGridModel. Also writes filterManager.
+
+        NOTE: This REPLACES gridSettings entirely (not merge) to avoid stale rows
+        from deep_merge accumulating old row IDs alongside new ones.
+        """
         gs = self._build_block_grid(rows_spec)
-        self.update(grid_uid, {"stepParams": {"gridSettings": gs}})
+        # Full replace: GET → force-set gridSettings → PUT
+        r = self._get(f"api/flowModels:get?filterByTk={grid_uid}")
+        if r.ok:
+            data = r.json().get("data", {})
+            opts = {k: v for k, v in data.items() if k not in ("uid", "name")}
+            sp = opts.get("stepParams", {})
+            sp["gridSettings"] = gs  # Full replace, not merge
+            opts["stepParams"] = sp
+            self._post(f"api/flowModels:update?filterByTk={grid_uid}",
+                       json={"options": opts})
 
         fm = getattr(self, '_filter_mappings', {}).get(grid_uid, [])
         if fm:
@@ -948,6 +1043,7 @@ class NB:
         self.save("FormSubmitActionModel", fm, "actions", "array", {}, 0)
         fg = self.save("FormGridModel", fm, "grid", "object")
         self._build_form_grid(fg, coll, fields, req, props=props)
+        self._last_create_form = fm
         return cp
 
     def edit_action(self, actcol: str, coll: str, fields, required: Optional[list] = None,
@@ -969,6 +1065,7 @@ class NB:
         self.save("FormSubmitActionModel", fm, "actions", "array", {}, 0)
         fg = self.save("FormGridModel", fm, "grid", "object")
         self._build_form_grid(fg, coll, fields, req, props=props)
+        self._last_edit_form = fm
         return ea
 
     def detail_popup(self, parent_uid: str, coll: str, tabs: list,
@@ -1015,24 +1112,19 @@ class NB:
 
     # ── KPI ────────────────────────────────────────────────────
 
-    def kpi(self, parent: str, title: str, coll: str, filter_: Optional[dict] = None,
-            color: Optional[str] = None, sort: Optional[int] = None) -> str:
-        """Create a KPI card that queries API and shows count.
-
-        filter_ values support "thisMonth" shorthand — it will be replaced
-        with a JS-computed $dateBetween range at runtime.
-        """
+    def _generate_kpi_code(self, title: str, coll: str,
+                           filter_: Optional[dict] = None,
+                           color: Optional[str] = None) -> str:
+        """Generate JS code for a KPI Statistic card (no HTTP, pure string)."""
         filter_js = ""
         date_preamble = ""
         if filter_:
-            # Pre-process "thisMonth" → JS-computed $dateBetween
             processed = {}
             has_this_month = False
             for k, v in filter_.items():
                 field = k.replace(".$dateOn", "")
                 if v == "thisMonth" or (isinstance(v, dict) and v.get("$dateOn") == "thisMonth"):
                     has_this_month = True
-                    # Use JS placeholder — replaced below
                     processed[field] = {"$dateBetween": ["__MONTH_START__", "__MONTH_END__"]}
                 else:
                     processed[k] = v
@@ -1048,7 +1140,7 @@ class NB:
             else:
                 filter_js = f", filter: {json.dumps(processed)}"
         color_js = f", color:'{color}'" if color else ""
-        code = f"""(async () => {{
+        return f"""(async () => {{
   try {{
 {date_preamble}    const r = await ctx.api.request({{
       url: '{coll}:list',
@@ -1066,6 +1158,11 @@ class NB:
     }}));
   }}
 }})();"""
+
+    def kpi(self, parent: str, title: str, coll: str, filter_: Optional[dict] = None,
+            color: Optional[str] = None, sort: Optional[int] = None) -> str:
+        """Create a KPI card that queries API and shows count."""
+        code = self._generate_kpi_code(title, coll, filter_, color)
         return self.js_block(parent, title, code, sort)
 
     # ── Event flows ────────────────────────────────────────────
@@ -1117,28 +1214,13 @@ class NB:
 
     # ── Outline (planning placeholders) ────────────────────────
 
-    def outline(self, parent: str, title: str, ctx_info: dict, sort: Optional[int] = None,
-                kind: str = "block") -> str:
-        """Create JS block/column/item that displays a planning outline on the page.
-
-        The outline shows all context needed for later implementation by AI/human.
-        The block's own UID is auto-injected into the rendered output.
-
-        Args:
-            parent:   parent UID (grid for block, table for column, form grid for item)
-            title:    display title
-            ctx_info: dict of context info to render
-            sort:     sort index (auto-increment if None)
-            kind:     "block" (JSBlockModel) | "column" (JSColumnModel) | "item" (JSItemModel)
-
-        Returns: UID of created block
-        """
+    def _outline_code(self, title: str, ctx_info: dict) -> str:
+        """Generate JS code for an outline placeholder block."""
         u = uid()
         ctx_info_with_uid = {"uid": u, **ctx_info}
         info_json = json.dumps(ctx_info_with_uid, ensure_ascii=False, indent=2)
-
-        icon = "\U0001f4cb"  # clipboard emoji
-        code = (
+        icon = "\U0001f4cb"
+        return (
             "const h = ctx.React.createElement;\n"
             f"const info = {info_json};\n"
             "const entries = Object.entries(info);\n"
@@ -1160,12 +1242,76 @@ class NB:
             "));"
         )
 
+    def outline(self, parent: str, title: str, ctx_info: dict, sort: Optional[int] = None,
+                kind: str = "block") -> str:
+        """Create JS block/column/item that displays a planning outline on the page.
+
+        The outline shows all context needed for later implementation by AI/human.
+        The block's own UID is auto-injected into the rendered output.
+
+        Args:
+            parent:   parent UID (grid for block, table for column, form grid for item)
+            title:    display title
+            ctx_info: dict of context info to render
+            sort:     sort index (auto-increment if None)
+            kind:     "block" (JSBlockModel) | "column" (JSColumnModel) | "item" (JSItemModel)
+
+        Returns: UID of created block
+        """
+        code = self._outline_code(title, ctx_info)
+
         if kind == "column":
             return self.js_column(parent, title, code, sort or 50, width=120)
         elif kind == "item":
             return self.js_item(parent, title, code, sort or 0)
         else:
-            return self.js_block(parent, title, code, sort)
+            block_uid = self.js_block(parent, title, code, sort)
+            # Auto-append to gridSettings so the block is visible in the layout.
+            # Groups blocks 2 per row (span=12+12) for a Dashboard-style layout.
+            self._append_to_grid(parent, block_uid)
+            return block_uid
+
+    def _append_to_grid(self, grid_uid: str, block_uid: str, span: int = 12) -> None:
+        """Append a block to an existing grid's gridSettings.
+
+        Smart grouping: tries to pair blocks into 2-column rows (span=12+12)
+        instead of creating one full-width row per block. This produces a
+        Dashboard-style layout instead of monotonous vertical stacking.
+        """
+        items = self._get_json("api/flowModels:list?paginate=false") or []
+        for it in items:
+            if it.get("uid") == grid_uid:
+                gs = it.get("stepParams", {}).get("gridSettings", {})
+                grid = gs.get("grid", {})
+                rows = grid.get("rows", {})
+                sizes = grid.get("sizes", {})
+
+                # Try to find last row with exactly 1 col of span<=12 to pair with
+                last_row_id = None
+                if rows:
+                    # Rows are ordered by insertion; find the last one
+                    row_ids = list(rows.keys())
+                    candidate = row_ids[-1]
+                    candidate_cols = rows[candidate]
+                    candidate_sizes = sizes.get(candidate, [24])
+                    # Pair if: 1 column, span <= 12, and it's a single-block column
+                    if (len(candidate_cols) == 1 and len(candidate_sizes) == 1
+                            and candidate_sizes[0] <= 12
+                            and len(candidate_cols[0]) == 1):
+                        last_row_id = candidate
+
+                if last_row_id:
+                    # Add as 2nd column in existing row
+                    rows[last_row_id].append([block_uid])
+                    sizes[last_row_id].append(span)
+                else:
+                    # Create new row
+                    row_id = uid()
+                    rows[row_id] = [[block_uid]]
+                    sizes[row_id] = [span]
+
+                self.update(grid_uid, {"stepParams": {"gridSettings": {"grid": {"rows": rows, "sizes": sizes}}}})
+                return
 
     def outline_row(self, parent, *specs):
         """Create multiple outline blocks. Returns list of UIDs.
@@ -1235,6 +1381,10 @@ class NB:
 
     def ai_employee_update(self, username: str, values: dict) -> bool:
         """Update AI employee fields."""
+        # Fix: skillSettings must be {"skills": [...]} not bare [...]
+        ss = values.get("skillSettings")
+        if isinstance(ss, list):
+            values["skillSettings"] = {"skills": ss}
         r = self._post(f"api/aiEmployees:update?filterByTk={username}", json=values)
         return r.ok
 
@@ -1393,7 +1543,10 @@ class NB:
     # ── Summary ────────────────────────────────────────────────
 
     def summary(self) -> dict:
-        return {"created": self.created, "errors": self.errors[:10]}
+        result = {"created": self.created, "errors": self.errors[:10]}
+        if self.warnings:
+            result["warnings"] = self.warnings[:10]
+        return result
 
 
 def get_nb_client() -> NB:

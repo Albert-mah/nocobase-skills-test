@@ -16,7 +16,7 @@ Environment variables:
 
 from mcp.server.fastmcp import FastMCP
 
-from .tools import collections, fields, routes, pages, page_tool, ai_employee, workflows
+from .tools import collections, fields, routes, pages, page_tool, ai_employee, workflows, tree_tools
 
 mcp = FastMCP(
     "nocobase",
@@ -31,6 +31,7 @@ pages.register_tools(mcp)
 page_tool.register_tools(mcp)
 ai_employee.register_tools(mcp)
 workflows.register_tools(mcp)
+tree_tools.register_tools(mcp)
 
 
 def main():

@@ -8,7 +8,8 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from ..client import get_nb_client, NB, DISPLAY_MAP, EDIT_MAP
+from ..client import get_nb_client, NB
+from ..models import DISPLAY_MAP, EDIT_MAP
 from ..utils import uid, deep_merge, safe_json
 
 
@@ -193,6 +194,131 @@ class PageTool:
         self._inspect_grid(tree, cm, lines, visited)
         return "\n".join(lines)
 
+    # ── Grid layout (pseudo-HTML) ─────────────────────────────────
+
+    def _grid_layout(self, grid, block_map, cm):
+        """Generate pseudo-HTML layout overview from gridSettings.
+
+        Uses ``<row>`` / ``<col span=N>`` / block tags to express the
+        page grid structure.  Stacked blocks become sibling children
+        inside a single ``<col>``.
+        """
+        gs = grid.get("stepParams", {}).get("gridSettings", {}).get("grid", {})
+        rows = gs.get("rows", {})
+        sizes = gs.get("sizes", {})
+        if not rows:
+            return []
+
+        lines = ["", "<grid>"]
+        for rid, cols in rows.items():
+            row_sizes = sizes.get(rid, [24] * len(cols))
+            lines.append("  <row>")
+            for ci, col_uids in enumerate(cols):
+                span = row_sizes[ci] if ci < len(row_sizes) else 24
+                tags = [self._block_tag(buid, block_map, cm) for buid in col_uids]
+                if len(tags) == 1:
+                    lines.append(f"    <col span={span}>{tags[0]}</col>")
+                else:
+                    lines.append(f"    <col span={span}>")
+                    for t in tags:
+                        lines.append(f"      {t}")
+                    lines.append(f"    </col>")
+            lines.append("  </row>")
+        lines.append("</grid>")
+        return lines
+
+    def _block_tag(self, uid_, block_map, cm):
+        """Generate a pseudo-HTML tag for a single block, with uid for drill-down."""
+        node = block_map.get(uid_) or self._model_by_uid(uid_)
+        if not node:
+            return f'<unknown uid="{uid_}" />'
+        use = node.get("use", "")
+        sp = node.get("stepParams", {})
+        u = f' uid="{uid_}"'
+
+        if "JSBlock" in use:
+            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            code_len = len((sp.get("jsSettings") or {}).get("runJs", {}).get("code", ""))
+            t = title or "untitled"
+            if code_len <= 1000:
+                return f"<kpi{u}>{t}</kpi>"
+            return f'<js code={code_len}{u}>{t}</js>'
+
+        if "FilterForm" in use:
+            fields = self._extract_filter_fields(node, cm)
+            return f'<filter{u} fields="{", ".join(fields)}" />'
+
+        if "TableBlock" in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "?")
+            title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            cols = sorted(cm.get(node["uid"], []), key=lambda m: m.get("sortIndex", 0))
+            plain = sum(1 for c in cols if "TableColumn" in c.get("use", "") and "Actions" not in c.get("use", ""))
+            js = sum(1 for c in cols if "JSColumn" in c.get("use", ""))
+            actions = []
+            for c in cols:
+                cu = c.get("use", "")
+                if "AddNew" in cu:
+                    actions.append("AddNew")
+                elif "ActionsColumn" in cu or "TableActions" in cu:
+                    for act in cm.get(c["uid"], []):
+                        au = act.get("use", "")
+                        if "Edit" in au:
+                            actions.append("Edit")
+                        elif "Detail" in au or "View" in au:
+                            actions.append("Detail")
+            detail_info = self._find_detail_popup(cols, cm, set())
+            if detail_info and "Detail" not in actions:
+                tab_count = detail_info.count('Tab "')
+                actions.append(f"Detail:{tab_count}tabs" if tab_count else "Detail")
+            js_attr = f' js={js}' if js else ""
+            act_attr = f' actions="{",".join(actions)}"' if actions else ""
+            title_attr = f' title="{title}"' if title else ""
+            return f'<table{u} collection="{coll}" columns={plain}{js_attr}{act_attr}{title_attr} />'
+
+        if "Reference" in use:
+            tpl = sp.get("referenceSettings", {}).get("useTemplate", {}).get("templateName", "")
+            return f'<ref{u} template="{tpl}" />'
+
+        if "Details" in use and "Item" not in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "")
+            col_attr = f' collection="{coll}"' if coll else ""
+            return f'<details{u}{col_attr} />'
+
+        if "ActionPanel" in use:
+            acts = sorted(cm.get(node["uid"], []), key=lambda m: m.get("sortIndex", 0))
+            names = []
+            for act in acts:
+                au = act.get("use", "")
+                if "Popup" in au:
+                    names.append("Popup")
+                elif "Link" in au:
+                    lt = act.get("stepParams", {}).get("linkActionSettings", {}).get("general", {}).get("title", "")
+                    names.append(lt or "Link")
+                else:
+                    names.append(au.replace("Model", ""))
+            return f'<actions{u}>{", ".join(names)}</actions>'
+
+        if "Chart" in use:
+            return f"<chart{u} />"
+
+        if "AIEmployee" in use:
+            return f"<ai-shortcuts{u} />"
+
+        if "List" in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "")
+            col_attr = f' collection="{coll}"' if coll else ""
+            return f'<list{u}{col_attr} />'
+
+        if "Form" in use and "Filter" not in use:
+            coll = sp.get("resourceSettings", {}).get("init", {}).get("collectionName", "")
+            col_attr = f' collection="{coll}"' if coll else ""
+            return f'<form{u}{col_attr} />'
+
+        tag = use.replace("Model", "").replace("Block", "").lower()
+        return f'<{tag}{u} />'
+
+    # ── Grid inspection ────────────────────────────────────────
+
     def _inspect_grid(self, tree, cm, lines, visited):
         """Inspect a BlockGridModel within a tree node."""
         grids = [c for c in tree.get("children", []) if "BlockGrid" in c.get("use", "")]
@@ -204,6 +330,10 @@ class PageTool:
         rows = gs.get("rows", {})
         sizes = gs.get("sizes", {})
         block_map = {c["uid"]: c for c in grid.get("children", [])}
+
+        # Grid layout overview (pseudo-HTML)
+        layout_lines = self._grid_layout(grid, block_map, cm)
+        lines.extend(layout_lines)
 
         # Classify blocks
         kpi_blocks = []
@@ -1388,3 +1518,22 @@ def register_tools(mcp: FastMCP):
         for p in pages:
             lines.append(f"{p['path']:<40} {p['tab_uid'] or 'N/A':<15} {p['route_id']}")
         return "\n".join(lines)
+
+    @mcp.tool()
+    def nb_fields(collection_name: str) -> str:
+        """Show all available fields for a collection.
+
+        Use this BEFORE creating forms, tables, or event flows to verify
+        which field names exist and what types they are.
+
+        Args:
+            collection_name: Collection name (e.g., "nb_am_assets")
+
+        Returns:
+            Formatted field list with names, types, and titles.
+
+        Example:
+            nb_fields("nb_am_purchase_requests")
+        """
+        nb = get_nb_client()
+        return nb.fields(collection_name)

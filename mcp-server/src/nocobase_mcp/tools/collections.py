@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import time
+import urllib.parse
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -414,6 +415,37 @@ def register_tools(mcp: FastMCP):
             results.append(f"[sync] ERROR: {e}")
             fields = []
 
+        # Step 2d: Auto-set titleField if not configured
+        # Find the first input/string field as titleField (prefer name > title > first input)
+        try:
+            coll_info = client.get(f"/api/collections:list?paginate=false&filter=" +
+                                   urllib.parse.quote(json.dumps({"name": name})))
+            coll_list = coll_info.get("data", [])
+            current_title_field = coll_list[0].get("titleField") if coll_list else None
+        except (APIError, IndexError):
+            current_title_field = None
+
+        if not current_title_field and fields:
+            input_fields = [f["name"] for f in fields
+                           if f.get("interface") in ("input", "sequence")
+                           and f["name"] not in ("id", "createdById", "updatedById")
+                           and not f["name"].endswith("Id")
+                           and not f["name"].startswith("f_")]
+            # Prefer common name patterns
+            preferred = None
+            for candidate in ["name", "title", "label", "subject", "code"]:
+                if candidate in input_fields:
+                    preferred = candidate
+                    break
+            title_field = preferred or (input_fields[0] if input_fields else None)
+            if title_field:
+                try:
+                    client.put(f"/api/collections:update?filterByTk={name}",
+                              {"titleField": title_field})
+                    results.append(f"[titleField] set to '{title_field}'")
+                except APIError:
+                    pass
+
         # Step 3: Batch upgrade field interfaces
         if fields_json:
             try:
@@ -484,7 +516,32 @@ def register_tools(mcp: FastMCP):
                     continue
 
                 nb_type = type_map.get(rel["type"], rel["type"])
-                rlabel = rel.get("label", "id")
+                rlabel = rel.get("label")
+                # Auto-detect label from target collection's titleField
+                if not rlabel or rlabel == "id":
+                    target_name = rel["target"]
+                    try:
+                        target_info = client.get(f"/api/collections:list?paginate=false&filter=" +
+                                                  urllib.parse.quote(json.dumps({"name": target_name})))
+                        target_list = target_info.get("data", [])
+                        tf = target_list[0].get("titleField") if target_list else None
+                        if tf and tf != "id":
+                            rlabel = tf
+                        else:
+                            # Guess from target fields
+                            try:
+                                tresp = client.get(f"/api/collections/{target_name}/fields:list?paginate=false")
+                                tfields = {f["name"]: f for f in tresp.get("data", [])}
+                                for candidate in ("name", "title", "label", "subject", "code"):
+                                    if candidate in tfields and tfields[candidate].get("interface") in ("input", "sequence"):
+                                        rlabel = candidate
+                                        break
+                                if not rlabel or rlabel == "id":
+                                    rlabel = "id"
+                            except APIError:
+                                rlabel = "id"
+                    except APIError:
+                        rlabel = "id"
                 rtitle = rel.get("title", rfield.replace("_", " ").title())
 
                 rpayload = {
@@ -619,7 +676,27 @@ def register_tools(mcp: FastMCP):
         except Exception as e:
             results.append(f"[tables] ERROR: {e}")
 
-        # Step 3: Clean routes/menus that reference these collections
-        # (Routes don't have collection references, so agents handle this separately)
+        # Step 3: Clean workflows that reference these collections
+        try:
+            resp = client.get("/api/workflows:list?paginate=false")
+            wfs = resp.get("data", [])
+            deleted_wf = 0
+            for wf in wfs:
+                coll = (wf.get("config") or {}).get("collection", "")
+                if coll.startswith(prefix):
+                    try:
+                        client.post(f"/api/workflows:destroy?filterByTk={wf['id']}")
+                        deleted_wf += 1
+                    except APIError:
+                        pass
+            results.append(f"[workflows] {deleted_wf} deleted (collection match)")
+        except APIError as e:
+            results.append(f"[workflows] ERROR: {e}")
+
+        # Step 4: Clean routes/menus whose title matches known system names
+        # Agents should still verify menu structure after cleanup
+        coll_names = [c["name"] for c in collections] if "collections" in dir() else []
+        if coll_names:
+            results.append(f"[routes] Agents should verify menu — old routes may remain for deleted collections")
 
         return f"Clean '{prefix}': " + " | ".join(results)
