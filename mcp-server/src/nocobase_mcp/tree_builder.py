@@ -206,11 +206,13 @@ class TreeBuilder:
         field_node = TreeNode(display, fsp, 0)
 
         if click:
-            fsp["popupSettings"]["openView"].update({
+            # Modify field_node.step_params directly (not fsp) because
+            # TreeNode.__init__ shallow-copies — new keys on fsp won't propagate
+            field_node.step_params["popupSettings"]["openView"].update({
                 "mode": "drawer", "size": "large",
                 "pageModelClass": "ChildPageModel", "uid": field_node.uid,
             })
-            fsp.setdefault("displayFieldSettings", {})["clickToOpen"] = {"clickToOpen": True}
+            field_node.step_params.setdefault("displayFieldSettings", {})["clickToOpen"] = {"clickToOpen": True}
 
         col_node.add_child("field", "object", field_node)
         return col_node
