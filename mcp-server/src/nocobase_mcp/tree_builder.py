@@ -114,6 +114,43 @@ class TreeNode:
                 total += val.count_nodes()
         return total
 
+    def to_flat_list(self, parent_id: str | None = None,
+                     sub_key: str | None = None,
+                     sub_type: str | None = None) -> list[dict]:
+        """Flatten tree to ordered list of individual save payloads (parent-first BFS).
+
+        Each payload is a flat dict ready for flowModels:save — the format that
+        correctly preserves subType on each record.
+        """
+        result = []
+        d: dict[str, Any] = {
+            "uid": self.uid,
+            "use": self.use,
+            "stepParams": self.step_params,
+            "sortIndex": self.sort_index,
+            "flowRegistry": self.flow_registry,
+        }
+        if parent_id is not None:
+            d["parentId"] = parent_id
+        if sub_key is not None:
+            d["subKey"] = sub_key
+        if sub_type is not None:
+            d["subType"] = sub_type
+        d.update(self._extra)
+        result.append(d)
+
+        # Recurse children in stable order
+        for key, val in self._sub_models.items():
+            if isinstance(val, list):
+                for child in val:
+                    result.extend(child.to_flat_list(
+                        parent_id=self.uid, sub_key=key, sub_type="array"))
+            else:
+                result.extend(val.to_flat_list(
+                    parent_id=self.uid, sub_key=key, sub_type="object"))
+
+        return result
+
 
 class TreeBuilder:
     """Pure-memory FlowModel page builder.

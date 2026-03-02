@@ -576,7 +576,11 @@ class NB:
     def save_tree(self, root, parent_uid: str,
                   sub_key: str = "grid", sub_type: str = "object",
                   filter_manager: Optional[list] = None) -> dict:
-        """Serialize a TreeNode tree and POST via flowModels:save.
+        """Flatten a TreeNode tree and save each node individually.
+
+        Uses individual flowModels:save calls (flat format) which correctly
+        preserves subType on each record. The nested subModels format was found
+        to convert subType:"array" → "object", causing frontend render failures.
 
         Args:
             root: TreeNode (from tree_builder) to serialize
@@ -586,17 +590,89 @@ class NB:
             filter_manager: optional filterManager array for the root node
 
         Returns:
-            API response data dict
+            dict with save summary (created count, errors)
         """
-        payload = root.to_dict(parent_id=parent_uid, sub_key=sub_key, sub_type=sub_type)
+        nodes = root.to_flat_list(parent_id=parent_uid, sub_key=sub_key, sub_type=sub_type)
+
+        # Attach filterManager to root node
         if filter_manager:
-            payload["filterManager"] = filter_manager
-        r = self._post("api/flowModels:save", json=payload)
-        if r.ok:
-            data = r.json().get("data", {})
-            self._invalidate_cache()
-            return data
-        raise APIError(r.status_code, r.text[:500], f"{self.base}/api/flowModels:save")
+            nodes[0]["filterManager"] = filter_manager
+
+        saved = 0
+        errors = []
+        for node in nodes:
+            r = self._post("api/flowModels:save", json=node)
+            if r.ok and r.json().get("data"):
+                saved += 1
+                self.created += 1
+            else:
+                errors.append(f"{node['use']}({node['uid']}): {r.text[:100]}")
+                self.errors.append(f"{node['use']}({node['uid']}): {r.text[:100]}")
+
+        self._invalidate_cache()
+        return {"saved": saved, "total": len(nodes), "errors": errors}
+
+    def save_tree_dict(self, tree_data: dict, parent_uid: str,
+                       sub_key: str = "grid", sub_type: str = "object") -> dict:
+        """Flatten a nested tree dict (with subModels) and save each node individually.
+
+        This is for raw tree JSON (e.g. from templates or nb_page_tree).
+        Uses the same flat-save approach as save_tree() to preserve subType.
+
+        Args:
+            tree_data: Nested tree dict with optional subModels
+            parent_uid: UID of the parent node
+            sub_key: Sub key for root
+            sub_type: Sub type for root
+
+        Returns:
+            dict with save summary
+        """
+        flat = []
+
+        def _flatten(node: dict, pid: str | None, sk: str | None, st: str | None):
+            rec = {
+                "uid": node.get("uid", uid()),
+                "use": node["use"],
+                "stepParams": node.get("stepParams", {}),
+                "sortIndex": node.get("sortIndex", 0),
+                "flowRegistry": node.get("flowRegistry", {}),
+            }
+            if pid:
+                rec["parentId"] = pid
+            if sk:
+                rec["subKey"] = sk
+            if st:
+                rec["subType"] = st
+            if "filterManager" in node:
+                rec["filterManager"] = node["filterManager"]
+            flat.append(rec)
+
+            for key, sub in node.get("subModels", {}).items():
+                child_st = sub.get("subType", "object")
+                data = sub.get("data")
+                if data is None:
+                    continue
+                if isinstance(data, list):
+                    for child in data:
+                        _flatten(child, rec["uid"], key, child_st)
+                elif isinstance(data, dict):
+                    _flatten(data, rec["uid"], key, child_st)
+
+        _flatten(tree_data, parent_uid, sub_key, sub_type)
+
+        saved, errors = 0, []
+        for node in flat:
+            r = self._post("api/flowModels:save", json=node)
+            if r.ok and r.json().get("data"):
+                saved += 1
+                self.created += 1
+            else:
+                errors.append(f"{node['use']}({node['uid']}): {r.text[:100]}")
+                self.errors.append(errors[-1])
+
+        self._invalidate_cache()
+        return {"saved": saved, "total": len(flat), "errors": errors}
 
     def get_tree(self, parent_uid: str, sub_key: str = "grid") -> Optional[dict]:
         """GET complete FlowModel tree with nested subModels.

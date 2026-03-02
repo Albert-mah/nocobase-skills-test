@@ -560,7 +560,7 @@ def register_tools(mcp: FastMCP):
             sidebar_outlines=outlines,
         )
 
-        # Single POST to create entire tree
+        # Save all nodes (flat individual saves to preserve subType)
         filter_manager = meta.pop("_filter_manager", None)
         nb.save_tree(root, tab_uid, filter_manager=filter_manager)
 

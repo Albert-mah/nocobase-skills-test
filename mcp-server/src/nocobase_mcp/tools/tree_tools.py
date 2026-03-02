@@ -66,20 +66,16 @@ def register_tools(mcp: FastMCP):
         # Clean existing content
         count = nb.clean_tab(tab_uid)
 
-        # Save the tree
-        r = nb._post("api/flowModels:save", json={
-            **tree_data,
-            "parentId": tab_uid,
-            "subKey": "grid",
-            "subType": "object",
+        # Flatten and save each node individually (preserves subType)
+        result = nb.save_tree_dict(tree_data, tab_uid)
+        return json.dumps({
+            "status": "ok",
+            "cleaned_nodes": count,
+            "root_uid": tree_data.get("uid", "?"),
+            "saved": result["saved"],
+            "total": result["total"],
+            **({"errors": result["errors"]} if result["errors"] else {}),
         })
-        if r.ok:
-            return json.dumps({
-                "status": "ok",
-                "cleaned_nodes": count,
-                "root_uid": tree_data.get("uid", "?"),
-            })
-        return json.dumps({"error": f"Save failed: {r.text[:300]}"})
 
     @mcp.tool()
     def nb_extract_template(tab_uid: str, collection: str, name: str) -> str:
@@ -141,19 +137,14 @@ def register_tools(mcp: FastMCP):
         fm = safe_json(field_map) if field_map else None
         tree_data = TreeBuilder.apply_template(template, collection, fm)
 
-        # Clean and save
+        # Clean and save each node individually (preserves subType)
         count = nb.clean_tab(tab_uid)
-        r = nb._post("api/flowModels:save", json={
-            **tree_data,
-            "parentId": tab_uid,
-            "subKey": "grid",
-            "subType": "object",
+        result = nb.save_tree_dict(tree_data, tab_uid)
+        return json.dumps({
+            "status": "ok",
+            "cleaned_nodes": count,
+            "collection": collection,
+            "root_uid": tree_data.get("uid", "?"),
+            "saved": result["saved"],
+            **({"errors": result["errors"]} if result["errors"] else {}),
         })
-        if r.ok:
-            return json.dumps({
-                "status": "ok",
-                "cleaned_nodes": count,
-                "collection": collection,
-                "root_uid": tree_data.get("uid", "?"),
-            })
-        return json.dumps({"error": f"Save failed: {r.text[:300]}"})
