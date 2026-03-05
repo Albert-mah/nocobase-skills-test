@@ -21,15 +21,34 @@ examples/skills/
 ├── executor.md        ← Minimal sub-agent prompt (optional)
 ├── knowledge/         ← Skill docs — read on demand per step
 │   ├── data-modeling.md      → nb_setup_collection etc.
-│   ├── page-building.md      → nb_compose_page etc.
+│   ├── page-building.md      → nb_page_markup, nb_compose_page etc.
 │   ├── js-sandbox.md         → ctx API, antd components
 │   ├── workflows.md          → nb_create_workflow etc.
 │   └── ai-employees.md       → nb_create_ai_employee etc.
 └── templates/         ← Code templates — read & fill on demand
     ├── js/index.md           → 12 JS column/sidebar/event templates
-    ├── pages/index.md        → 5 page layout templates
+    ├── pages/index.md        → 5 page layout patterns
     └── workflows/index.md    → 4 workflow templates
 ```
+
+## Two-Phase Build Workflow
+
+### Phase 1: XML Markup → Pages with Placeholders
+Write XML markup defining page structure. All JS nodes are description-only placeholders.
+```
+nb_page_markup(tab_uid, "<page collection=\"users\">...</page>")
+```
+
+### Phase 2: Auto-generate JS → Implement Remaining → Deploy
+```
+nb_auto_js("CRM")             → auto-generates column JS files + stub files for blocks/items
+                                 returns task table: [auto] = ready, [todo] = needs manual work
+# Implement [todo] files manually (blocks, items, events)
+nb_inject_js_dir("js/")       → batch deploy all JS files
+```
+
+Column JS (composite, currency, countdown, progress, stars, relative_time) is auto-generated from templates.
+Blocks/items/events get stub files — implement manually or dispatch to sub-agents.
 
 ## Requirements: Two Formats
 
@@ -53,12 +72,12 @@ Generated via `examples/prompts/design-prompt.md` → Stage 1.
 
 ### Single Agent (no cluster)
 1. Read `checklist.md`, execute sequentially
-2. Steps marked `[parallel-ok]` — just do them one by one
-3. Phase 4 (JS): write each JS piece, deploy, verify, then next
+2. Phase 3: Write XML markup for each page, call `nb_page_markup`
+3. Phase 4: `nb_find_placeholders` → implement each JS via `nb_inject_js`
 
 ### Cluster Agent (with sub-agents)
 1. Read `checklist.md`, dispatch sub-agents where marked
-2. **Phase 4 (JS) is the key parallelization point** — dispatch one sub-agent per JS task (column/sidebar/event). Each sub-agent writes code, deploys, and verifies independently.
+2. **Phase 4 (JS) is the key parallelization point** — dispatch one sub-agent per placeholder. Each sub-agent writes code, injects, and verifies independently.
 3. Phase 2 (fields), Phase 5 (workflows), Phase 6 (AI) also parallelize well
 
 ### Resume After Interruption
@@ -76,7 +95,7 @@ Generated via `examples/prompts/design-prompt.md` → Stage 1.
 ├── *.html                 # Optional: HTML prototypes
 ├── design-notes.md        # Optional: UX patterns from prototypes
 ├── notes.md               # Progress tracker + shared state
-└── pages_batch{N}.json    # Intermediate: page definitions
+└── pages_batch{N}.json    # Intermediate: page markup definitions
 ```
 
 ## Template Library
@@ -84,7 +103,7 @@ Generated via `examples/prompts/design-prompt.md` → Stage 1.
 | Category | Index | Count | Description |
 |----------|-------|-------|-------------|
 | JS Enhancement | `templates/js/index.md` | 22 | Blocks (4), sidebars (3), columns (7), items (3), events (5) |
-| Page Layouts | `templates/pages/index.md` | 5 | CRUD patterns (KPI, sidebar, pipeline, simple, dashboard) |
+| Page Layouts | `templates/pages/index.md` | 5 | Layout patterns (KPI, sidebar, pipeline, simple, dashboard) |
 | Workflows | `templates/workflows/index.md` | 4 | Auto-number, status sync, default value, date reminder |
 
 ## File Reference
@@ -94,8 +113,8 @@ Generated via `examples/prompts/design-prompt.md` → Stage 1.
 | `checklist.md` | Always — your execution guide |
 | `knowledge/data-modeling.md` | Phase 1 |
 | `knowledge/page-building.md` | Phase 3 — tool reference |
-| `templates/pages/index.md` | **Phase 3 — page templates + pattern→template→JS mapping** |
-| `templates/js/index.md` | Phase 3 (js_columns) + Phase 4 (blocks, items, events) |
+| `templates/pages/index.md` | **Phase 3 — layout patterns + placeholder mapping** |
+| `templates/js/index.md` | Phase 4 — JS templates for placeholder implementation |
 | `knowledge/js-sandbox.md` | Phase 4 |
 | `knowledge/workflows.md` | Phase 5 |
 | `knowledge/ai-employees.md` | Phase 6 |

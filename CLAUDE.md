@@ -3,7 +3,7 @@
 ## What This Repo Does
 
 This repo lets AI agents operate NocoBase through MCP tools + Skills knowledge.
-- **MCP Server** (mcp-server/) — 55 API tools (atomic + batch)
+- **MCP Server** (mcp-server/) — 63 API tools (atomic + batch)
 - **Skills** (skills/) — 4 workflow guides (data modeling, page building, workflow, AI employee)
 - **Examples** (examples/) — 5 agent-buildable system prompts + scripted Asset Management demo
 - **Guide** (docs/guide.md) — complete usage guide with troubleshooting
@@ -120,9 +120,9 @@ See `docs/guide.md` for the full troubleshooting guide.
 
 | Path | Purpose |
 |------|---------|
-| `mcp-server/` | MCP server with 55 tools across 7 modules |
+| `mcp-server/` | MCP server with 63 tools across 8 modules |
 | `skills/` | 4 skill knowledge files |
-| `examples/prompts/` | 5 system prompts (CRM, HRM, EDU, ITSM, WMS) + CLAUDE.md template |
+| `examples/prompts/` | 5 system prompts + CLAUDE.md template + JS enhance prompt + JS sandbox reference |
 | `examples/asset-management/` | Complete AM demo (8 build scripts + 2 utility scripts) |
 | `examples/asset-management/nb_page_builder.py` | Reusable page builder library (with field validation) |
 | `examples/asset-management/nb_workflow_builder.py` | Reusable workflow builder library |

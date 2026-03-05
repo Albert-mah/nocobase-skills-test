@@ -408,7 +408,11 @@ class NB:
         if not self._title_cache:
             colls = self._get_json("api/collections:list?paginate=false") or []
             for c in colls:
-                self._title_cache[c["name"]] = c.get("titleField") or "name"
+                tf = c.get("titleField")
+                if not tf:
+                    # No titleField set — will be resolved by _label() dynamically
+                    tf = "id"
+                self._title_cache[c["name"]] = tf
                 self._coll_title_cache[c["name"]] = c.get("title", c["name"])
 
     def _visible_fields(self, coll):
@@ -440,6 +444,35 @@ class NB:
         msg = f"field '{field}' not in {coll_label}({coll}).{hint}"
         self.warnings.append(msg)
         return False
+
+    def _valid_field(self, coll, field):
+        """Check if field exists in collection metadata. No warnings."""
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        return not schema or field in schema
+
+    def _valid_collection(self, coll):
+        """Check if collection exists and has registered fields."""
+        self._load_meta(coll)
+        return bool(self._field_cache.get(coll))
+
+    def _filter_valid_fields(self, coll, fields):
+        """Filter field list to only existing fields. Returns (valid, skipped)."""
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        if not schema:
+            return fields, []  # no metadata = allow all
+        valid, skipped = [], []
+        for f in fields:
+            if f in schema:
+                valid.append(f)
+            else:
+                skipped.append(f)
+        if skipped:
+            coll_label = self._coll_title_cache.get(coll, coll)
+            self.warnings.append(
+                f"skipped {len(skipped)} invalid fields in {coll_label}({coll}): {skipped}")
+        return valid, skipped
 
     def _iface(self, coll, field):
         self._load_meta(coll)
@@ -612,11 +645,47 @@ class NB:
         self._invalidate_cache()
         return {"saved": saved, "total": len(nodes), "errors": errors}
 
+    def save_nested(self, root, parent_uid: str,
+                    sub_key: str = "grid", sub_type: str = "object",
+                    filter_manager: Optional[list] = None) -> dict:
+        """Save entire tree in one flowModels:save call (nested subModels format).
+
+        Uses to_dict() which now outputs direct array/object subModels
+        (matching NocoBase client serialize()). Falls back to save_tree()
+        on failure.
+
+        Args:
+            root: TreeNode to serialize
+            parent_uid: UID of the parent FlowModel (e.g. tab UID)
+            sub_key: sub key for the root node (default "grid")
+            sub_type: sub type for the root node (default "object")
+            filter_manager: optional filterManager array for the root node
+
+        Returns:
+            dict with save summary
+        """
+        data = root.to_dict(parent_id=parent_uid, sub_key=sub_key, sub_type=sub_type)
+        if filter_manager:
+            data["filterManager"] = filter_manager
+
+        node_count = root.count_nodes()
+        r = self._post("api/flowModels:save", json=data)
+        if r.ok and r.json().get("data"):
+            self.created += node_count
+            self._invalidate_cache()
+            return {"saved": node_count, "total": node_count, "errors": [],
+                    "method": "nested"}
+
+        # Fallback to flat save
+        self.warnings.append(
+            f"save_nested failed ({r.status_code}), falling back to save_tree")
+        return self.save_tree(root, parent_uid, sub_key, sub_type, filter_manager)
+
     def save_tree_dict(self, tree_data: dict, parent_uid: str,
                        sub_key: str = "grid", sub_type: str = "object") -> dict:
         """Flatten a nested tree dict (with subModels) and save each node individually.
 
-        This is for raw tree JSON (e.g. from templates or nb_page_tree).
+        This is for raw tree JSON dicts with nested subModels structure.
         Uses the same flat-save approach as save_tree() to preserve subType.
 
         Args:
@@ -1023,7 +1092,7 @@ class NB:
         fb = self.save("FilterFormBlockModel", parent, "items", "array", {
             "formFilterBlockModelSettings": {"layout": {
                 "layout": "horizontal", "labelAlign": "left",
-                "labelWidth": 50, "labelWrap": False, "colon": True}},
+                "labelWidth": 100, "labelWrap": False, "colon": True}},
         }, sort)
         fg = self.save("FilterFormGridModel", fb, "grid", "object")
         self._load_meta(coll)
@@ -1293,7 +1362,7 @@ class NB:
     def _outline_code(self, title: str, ctx_info: dict) -> str:
         """Generate JS code for an outline placeholder block."""
         u = uid()
-        ctx_info_with_uid = {"uid": u, **ctx_info}
+        ctx_info_with_uid = {"__outline__": True, "uid": u, **ctx_info}
         info_json = json.dumps(ctx_info_with_uid, ensure_ascii=False, indent=2)
         icon = "\U0001f4cb"
         return (
@@ -1414,6 +1483,1201 @@ class NB:
                         if ch.get("parentId") == it["uid"] and "Display" in (ch.get("use") or ""):
                             return ch["uid"]
         return None
+
+    # ── JS update / outline discovery ─────────────────────────
+
+    def update_js(self, uid_: str, code: str, title: str | None = None) -> bool:
+        """Update JS code on an existing JSBlockModel/JSColumnModel/JSItemModel.
+
+        Uses GET → merge → PUT pattern. Handles different stepParams structures
+        per model type.
+        """
+        data = self._get_json(f"api/flowModels:get?filterByTk={uid_}")
+        if not data:
+            return False
+        use = data.get("use", "")
+        patch: dict = {"stepParams": {"jsSettings": {"runJs": {"code": code, "version": "v1"}}}}
+        if title:
+            if use == "JSBlockModel":
+                patch["stepParams"]["cardSettings"] = {"titleDescription": {"title": title}}
+            elif use == "JSColumnModel":
+                patch["stepParams"]["tableColumnSettings"] = {"title": {"title": title}}
+            elif use == "JSItemModel":
+                patch["stepParams"]["editItemSettings"] = {"showLabel": {"showLabel": True, "title": title}}
+        return self.update(uid_, patch)
+
+    def find_outlines(self, scope: str) -> list[dict]:
+        """Find outline placeholders under a tab UID or by scanning menu prefix.
+
+        Args:
+            scope: Tab UID, or a title prefix to match across all pages (e.g. "CRM")
+
+        Returns:
+            List of dicts with uid, use, title, ctx_info, parent_uid, collection info.
+        """
+        all_models = self._list_all()
+
+        # Build parent→children map and uid→model lookup
+        uid_map = {m["uid"]: m for m in all_models}
+
+        # Determine target UIDs: either descendants of scope UID, or all
+        target_uids = None
+        if scope in uid_map:
+            # scope is a specific tab UID — collect all descendants
+            target_uids = set(self._collect_descendants(scope))
+            target_uids.add(scope)
+        else:
+            # scope is a prefix — find matching routes then collect tab UIDs
+            try:
+                routes = self._get_json("api/desktopRoutes:list?paginate=false") or []
+                tab_uids = set()
+                for rt in routes:
+                    if rt.get("title", "").startswith(scope):
+                        su = rt.get("schemaUid")
+                        if su:
+                            tab_uids.add(su)
+                        for child in rt.get("children", []):
+                            csu = child.get("schemaUid")
+                            if csu:
+                                tab_uids.add(csu)
+                if tab_uids:
+                    target_uids = set()
+                    for tu in tab_uids:
+                        target_uids.add(tu)
+                        target_uids.update(self._collect_descendants(tu))
+            except Exception:
+                pass  # Fall through to scan all
+
+        results = []
+        for m in all_models:
+            if target_uids is not None and m["uid"] not in target_uids:
+                continue
+            sp = m.get("stepParams", {})
+            code = sp.get("jsSettings", {}).get("runJs", {}).get("code", "")
+            if "__outline__" not in code:
+                continue
+
+            # Extract ctx_info from the JS code (it's a JSON object in the code)
+            ctx_info = {}
+            try:
+                # The outline code has: const info = {...};
+                import re
+                match = re.search(r'const info = (\{.*?\});', code, re.DOTALL)
+                if match:
+                    ctx_info = json.loads(match.group(1))
+            except Exception:
+                pass
+
+            # Determine title from stepParams
+            use = m.get("use", "")
+            title = ""
+            if use == "JSBlockModel":
+                title = sp.get("cardSettings", {}).get("titleDescription", {}).get("title", "")
+            elif use == "JSColumnModel":
+                title = sp.get("tableColumnSettings", {}).get("title", {}).get("title", "")
+            elif use == "JSItemModel":
+                title = sp.get("editItemSettings", {}).get("showLabel", {}).get("title", "")
+
+            # Find collection context from parent chain
+            collection = ""
+            parent_uid = m.get("parentId", "")
+            visited = set()
+            p = parent_uid
+            while p and p not in visited:
+                visited.add(p)
+                pm = uid_map.get(p)
+                if not pm:
+                    break
+                rs = pm.get("stepParams", {}).get("resourceSettings", {}).get("init", {})
+                if rs.get("collectionName"):
+                    collection = rs["collectionName"]
+                    break
+                p = pm.get("parentId", "")
+
+            results.append({
+                "uid": m["uid"],
+                "use": use,
+                "title": title,
+                "ctx_info": ctx_info,
+                "parent_uid": parent_uid,
+                "collection": collection,
+            })
+
+        return results
+
+    # ── Form refinement ────────────────────────────────────────
+
+    def _find_children_by_use(self, parent_uid: str, use: str,
+                               all_models: list | None = None) -> list[dict]:
+        """Find direct children of parent_uid with given use."""
+        if all_models is None:
+            all_models = self._list_all()
+        return [m for m in all_models
+                if m.get("parentId") == parent_uid and m.get("use") == use]
+
+    def _find_child_uid(self, parent_uid: str, use: str,
+                         all_models: list | None = None) -> str | None:
+        """Find first direct child UID with given use."""
+        children = self._find_children_by_use(parent_uid, use, all_models)
+        return children[0]["uid"] if children else None
+
+    def _get_table_collection(self, table_uid: str,
+                               all_models: list | None = None) -> str:
+        """Get collection name from a TableBlockModel's stepParams."""
+        if all_models is None:
+            all_models = self._list_all()
+        uid_map = {m["uid"]: m for m in all_models}
+        tbl = uid_map.get(table_uid)
+        if not tbl:
+            raise ValueError(f"TableBlockModel {table_uid} not found")
+        return tbl.get("stepParams", {}).get("resourceSettings", {}).get(
+            "init", {}).get("collectionName", "")
+
+    def _find_click_field_uid(self, table_uid: str,
+                               all_models: list | None = None) -> str | None:
+        """Find the first column's DisplayFieldModel that has clickToOpen."""
+        if all_models is None:
+            all_models = self._list_all()
+        cols = [m for m in all_models
+                if m.get("parentId") == table_uid
+                and m.get("use") == "TableColumnModel"]
+        cols.sort(key=lambda m: m.get("sortIndex", 999))
+        for col in cols:
+            fields = [m for m in all_models
+                      if m.get("parentId") == col["uid"]
+                      and "DisplayField" in m.get("use", "")]
+            for f in fields:
+                sp = f.get("stepParams", {})
+                cto = sp.get("displayFieldSettings", {}).get("clickToOpen", {})
+                if cto.get("clickToOpen"):
+                    return f["uid"]
+        return None
+
+    def set_form(self, table_uid: str, form_type: str, fields_dsl: str,
+                 events: list | None = None) -> dict:
+        """Replace a table's addnew or edit form with new field layout.
+
+        1. Finds the action node (AddNewActionModel or EditActionModel)
+        2. Destroys old ChildPageModel subtree
+        3. Builds new form tree with fields DSL
+        4. Saves new subtree
+
+        Args:
+            table_uid: TableBlockModel UID
+            form_type: "addnew" or "edit"
+            fields_dsl: Fields DSL string (supports sections, side-by-side, required)
+            events: Optional event placeholder defs:
+                [{"on": "formValuesChange", "desc": "..."}]
+
+        Returns:
+            dict with form_uid, type, node_count
+        """
+        from .tree_builder import TreeBuilder
+
+        all_models = self._list_all()
+        coll = self._get_table_collection(table_uid, all_models)
+        if not coll:
+            raise ValueError(f"Cannot determine collection for table {table_uid}")
+
+        self._load_meta(coll)
+
+        if form_type == "addnew":
+            # Find AddNewActionModel under table
+            addnew_uid = self._find_child_uid(table_uid, "AddNewActionModel", all_models)
+            if not addnew_uid:
+                raise ValueError(f"No AddNewActionModel found under {table_uid}")
+
+            # Destroy old ChildPageModel
+            old_cp = self._find_child_uid(addnew_uid, "ChildPageModel", all_models)
+            if old_cp:
+                self.destroy_tree(old_cp)
+                self._invalidate_cache()
+
+            # Build new form tree
+            tb = TreeBuilder(self)
+            new_cp = tb.addnew_form(coll, fields_dsl)
+
+            # Attach event placeholders
+            if events:
+                form_node = self._find_tree_form(new_cp)
+                if form_node:
+                    for evt in events:
+                        reg = tb.placeholder_event(evt["on"], evt.get("desc", ""))
+                        form_node.flow_registry.update(reg)
+
+            # Save
+            result = self.save_tree(new_cp, addnew_uid,
+                                     sub_key="page", sub_type="object")
+            return {"form_uid": new_cp._create_form_uid, "type": "addnew",
+                    "collection": coll, "node_count": result.get("saved", 0)}
+
+        elif form_type == "edit":
+            # Find TableActionsColumnModel under table
+            actcol_uid = self._find_child_uid(table_uid, "TableActionsColumnModel", all_models)
+            if not actcol_uid:
+                raise ValueError(f"No TableActionsColumnModel found under {table_uid}")
+
+            # Find and destroy old EditActionModel
+            old_edit = self._find_child_uid(actcol_uid, "EditActionModel", all_models)
+            if old_edit:
+                self.destroy_tree(old_edit)
+                self._invalidate_cache()
+
+            # Build new edit action + form
+            tb = TreeBuilder(self)
+            edit_node = tb.edit_action(coll, fields_dsl)
+
+            # Attach event placeholders
+            if events:
+                form_node = self._find_tree_form(edit_node)
+                if form_node:
+                    for evt in events:
+                        reg = tb.placeholder_event(evt["on"], evt.get("desc", ""))
+                        form_node.flow_registry.update(reg)
+
+            # Save
+            result = self.save_tree(edit_node, actcol_uid,
+                                     sub_key="actions", sub_type="array")
+            return {"form_uid": edit_node._edit_form_uid, "type": "edit",
+                    "collection": coll, "node_count": result.get("saved", 0)}
+
+        else:
+            raise ValueError(f"form_type must be 'addnew' or 'edit', got '{form_type}'")
+
+    def _find_tree_form(self, node) -> 'Any | None':
+        """Recursively find CreateFormModel or EditFormModel in TreeNode tree."""
+        if node.use in ("CreateFormModel", "EditFormModel"):
+            return node
+        for val in node._sub_models.values():
+            if isinstance(val, list):
+                for child in val:
+                    found = self._find_tree_form(child)
+                    if found:
+                        return found
+            else:
+                found = self._find_tree_form(val)
+                if found:
+                    return found
+        return None
+
+    def set_detail(self, table_uid: str, detail_json: list) -> dict:
+        """Replace a table's detail popup with new tab structure.
+
+        1. Finds the click field (DisplayFieldModel with clickToOpen)
+        2. Destroys old ChildPageModel subtree
+        3. Builds new detail popup with tabs
+        4. Saves new subtree
+
+        Args:
+            table_uid: TableBlockModel UID
+            detail_json: Array of tab definitions:
+                - Fields tab: {"title": "Info", "fields": "DSL",
+                    "js_items": [{"title": "Summary", "desc": "..."}]}
+                - Subtable tab: {"title": "Contacts", "assoc": "contacts",
+                    "coll": "nb_crm_contacts", "fields": ["name","phone"]}
+
+        Returns:
+            dict with tab count, type, node_count
+        """
+        from .tree_builder import TreeBuilder
+
+        all_models = self._list_all()
+        coll = self._get_table_collection(table_uid, all_models)
+        if not coll:
+            raise ValueError(f"Cannot determine collection for table {table_uid}")
+
+        self._load_meta(coll)
+
+        # Find click field
+        click_uid = self._find_click_field_uid(table_uid, all_models)
+        if not click_uid:
+            raise ValueError(f"No click field (first column with clickToOpen) found under {table_uid}")
+
+        # Destroy old ChildPageModel
+        old_cp = self._find_child_uid(click_uid, "ChildPageModel", all_models)
+        if old_cp:
+            self.destroy_tree(old_cp)
+            self._invalidate_cache()
+
+        # Ensure popupSettings on click field
+        uid_map = {m["uid"]: m for m in all_models}
+        cf_data = uid_map.get(click_uid, {})
+        popup_sp = cf_data.get("stepParams", {}).get("popupSettings", {}).get("openView", {})
+        if not popup_sp.get("pageModelClass"):
+            self.update(click_uid, {"stepParams": {"popupSettings": {"openView": {
+                "collectionName": coll, "dataSourceKey": "main",
+                "mode": "drawer", "size": "large",
+                "pageModelClass": "ChildPageModel", "uid": click_uid,
+            }}}})
+
+        # Convert js_items in tabs to block definitions
+        tb = TreeBuilder(self)
+        for tab in detail_json:
+            if "js_items" in tab:
+                blocks = []
+                if tab.get("fields"):
+                    blocks.append({"type": "details", "fields": tab["fields"]})
+                for ji in tab["js_items"]:
+                    code = tb._placeholder_code(ji["title"], ji.get("desc", ""), "item")
+                    blocks.append({"type": "js", "title": ji["title"], "code": code})
+                tab["blocks"] = blocks
+                if "js_items" in tab:
+                    del tab["js_items"]
+                # Keep fields for fallback
+                if "fields" not in tab:
+                    tab["fields"] = ""
+
+        # Build new detail popup
+        popup_cp = tb.detail_popup(coll, detail_json)
+
+        # Save
+        result = self.save_tree(popup_cp, click_uid,
+                                 sub_key="page", sub_type="object")
+        return {"tabs": len(detail_json), "type": "detail",
+                "collection": coll, "node_count": result.get("saved", 0)}
+
+    def auto_forms(self, scope: str) -> dict:
+        """Scan all table forms/popups and generate refinement task list.
+
+        Compares each form's field count to collection total.
+        Returns task table with [ok] (>=70% coverage) and [todo] (<70%) markers.
+
+        Args:
+            scope: Tab UID or title prefix (e.g. "CRM")
+
+        Returns:
+            dict with tasks list and markdown task_table
+        """
+        all_models = self._list_all()
+        uid_map = {m["uid"]: m for m in all_models}
+
+        # Resolve scope to tab UIDs
+        target_uids = None
+        if scope in uid_map:
+            target_uids = set(self._collect_descendants(scope))
+            target_uids.add(scope)
+        else:
+            try:
+                routes = self._get_json(
+                    "api/desktopRoutes:list?paginate=false&tree=true") or []
+                tab_uids = set()
+
+                def _collect_tab_uids(rts):
+                    for rt in rts:
+                        rtype = rt.get("type", "")
+                        if rtype == "group":
+                            _collect_tab_uids(rt.get("children", []))
+                        elif rtype == "flowPage":
+                            for ch in rt.get("children", []):
+                                if ch.get("type") == "tabs":
+                                    csu = ch.get("schemaUid")
+                                    if csu:
+                                        tab_uids.add(csu)
+
+                for rt in routes:
+                    if rt.get("title", "").upper().startswith(scope.upper()):
+                        _collect_tab_uids(rt.get("children", []))
+
+                if tab_uids:
+                    target_uids = set()
+                    for tu in tab_uids:
+                        target_uids.add(tu)
+                        target_uids.update(self._collect_descendants(tu))
+            except Exception:
+                pass
+
+        # Find all TableBlockModels in scope
+        tables = []
+        for m in all_models:
+            if m.get("use") != "TableBlockModel":
+                continue
+            if target_uids is not None and m["uid"] not in target_uids:
+                continue
+            # Skip sub-tables (those with association)
+            rs = m.get("stepParams", {}).get("resourceSettings", {}).get("init", {})
+            if rs.get("association") or rs.get("associationName"):
+                continue
+            tables.append(m)
+
+        # Assess each table's forms
+        results = []
+        for tbl in tables:
+            rs = tbl.get("stepParams", {}).get("resourceSettings", {}).get("init", {})
+            coll = rs.get("collectionName", "")
+            if not coll:
+                continue
+
+            self._load_meta(coll)
+            schema = self._field_cache.get(coll, {})
+            # Get editable field count (same logic as markup_parser)
+            skip_names = {"id", "createdAt", "updatedAt", "createdById",
+                          "updatedById", "createdBy", "updatedBy", "sort"}
+            skip_ifaces = {"o2m", "m2m", "oho", "obo", "createdBy", "updatedBy",
+                           "createdAt", "updatedAt"}
+            editable = [n for n, info in schema.items()
+                        if n not in skip_names
+                        and not n.startswith("f_") and not n.endswith("Id")
+                        and info.get("interface") not in skip_ifaces]
+            total_fields = len(editable)
+
+            # Find page title
+            page_title = self._find_page_title_for(tbl["uid"], uid_map)
+
+            # Assess AddNew
+            addnew_info = self._assess_popup_form(
+                tbl["uid"], "AddNewActionModel", "CreateFormModel",
+                all_models, uid_map, "addnew")
+
+            # Assess Edit
+            edit_info = self._assess_edit_form(
+                tbl["uid"], all_models, uid_map)
+
+            # Assess Detail
+            detail_info = self._assess_detail_popup(
+                tbl["uid"], all_models, uid_map)
+
+            for info in [addnew_info, edit_info, detail_info]:
+                info["table_uid"] = tbl["uid"]
+                info["collection"] = coll
+                info["total_fields"] = total_fields
+                info["available_fields"] = editable
+                info["page"] = page_title or ""
+                info["status"] = "[ok]" if total_fields and info["field_count"] / total_fields >= 0.7 else "[todo]"
+                results.append(info)
+
+        # Generate markdown task table
+        task_table = self._format_form_task_table(results)
+        return {"tasks": results, "task_table": task_table,
+                "total": len(results),
+                "todo": len([r for r in results if r["status"] == "[todo]"]),
+                "ok": len([r for r in results if r["status"] == "[ok]"])}
+
+    def _assess_popup_form(self, table_uid: str, action_use: str,
+                            form_use: str, all_models: list,
+                            uid_map: dict, form_type: str) -> dict:
+        """Count form fields inside action → ChildPage → Form chain."""
+        action = self._find_child_uid(table_uid, action_use, all_models)
+        if not action:
+            return {"form_type": form_type, "field_count": 0, "form_uid": None,
+                    "fields": [], "has_sections": False}
+
+        # action → ChildPageModel → ... → CreateFormModel/EditFormModel → FormGridModel → FormItemModels
+        descendants = self._collect_descendants(action)
+        form_items = [uid_map[u] for u in descendants
+                      if u in uid_map and uid_map[u].get("use") == "FormItemModel"]
+        field_names = []
+        for fi in form_items:
+            fp = fi.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+            if fp:
+                field_names.append(fp)
+
+        # Check for sections (DividerItemModel)
+        has_sections = any(uid_map[u].get("use") == "DividerItemModel"
+                          for u in descendants if u in uid_map)
+
+        # Find form UID
+        form_uid = None
+        for u in descendants:
+            if u in uid_map and uid_map[u].get("use") == form_use:
+                form_uid = u
+                break
+
+        return {"form_type": form_type, "field_count": len(field_names),
+                "form_uid": form_uid, "fields": field_names,
+                "has_sections": has_sections}
+
+    def _assess_edit_form(self, table_uid: str, all_models: list,
+                           uid_map: dict) -> dict:
+        """Count edit form fields (EditActionModel under TableActionsColumnModel)."""
+        actcol = self._find_child_uid(table_uid, "TableActionsColumnModel", all_models)
+        if not actcol:
+            return {"form_type": "edit", "field_count": 0, "form_uid": None,
+                    "fields": [], "has_sections": False}
+
+        edit_action = self._find_child_uid(actcol, "EditActionModel", all_models)
+        if not edit_action:
+            return {"form_type": "edit", "field_count": 0, "form_uid": None,
+                    "fields": [], "has_sections": False}
+
+        descendants = self._collect_descendants(edit_action)
+        form_items = [uid_map[u] for u in descendants
+                      if u in uid_map and uid_map[u].get("use") == "FormItemModel"]
+        field_names = []
+        for fi in form_items:
+            fp = fi.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+            if fp:
+                field_names.append(fp)
+
+        has_sections = any(uid_map[u].get("use") == "DividerItemModel"
+                          for u in descendants if u in uid_map)
+
+        form_uid = None
+        for u in descendants:
+            if u in uid_map and uid_map[u].get("use") == "EditFormModel":
+                form_uid = u
+                break
+
+        return {"form_type": "edit", "field_count": len(field_names),
+                "form_uid": form_uid, "fields": field_names,
+                "has_sections": has_sections}
+
+    def _assess_detail_popup(self, table_uid: str, all_models: list,
+                              uid_map: dict) -> dict:
+        """Count detail popup tabs and fields."""
+        click_uid = self._find_click_field_uid(table_uid, all_models)
+        if not click_uid:
+            return {"form_type": "detail", "field_count": 0, "form_uid": None,
+                    "fields": [], "has_sections": False, "tabs": 0}
+
+        cp_uid = self._find_child_uid(click_uid, "ChildPageModel", all_models)
+        if not cp_uid:
+            return {"form_type": "detail", "field_count": 0, "form_uid": None,
+                    "fields": [], "has_sections": False, "tabs": 0}
+
+        descendants = self._collect_descendants(cp_uid)
+        # Count tabs
+        tab_count = sum(1 for u in descendants if u in uid_map
+                        and uid_map[u].get("use") == "ChildPageTabModel")
+        # Count detail fields
+        detail_items = [uid_map[u] for u in descendants
+                        if u in uid_map and uid_map[u].get("use") == "DetailsItemModel"]
+        field_names = []
+        for di in detail_items:
+            fp = di.get("stepParams", {}).get("fieldSettings", {}).get("init", {}).get("fieldPath", "")
+            if fp:
+                field_names.append(fp)
+
+        has_sections = any(uid_map[u].get("use") == "DividerItemModel"
+                          for u in descendants if u in uid_map)
+
+        return {"form_type": "detail", "field_count": len(field_names),
+                "form_uid": cp_uid, "fields": field_names,
+                "has_sections": has_sections, "tabs": tab_count}
+
+    def _find_page_title_for(self, uid_: str, uid_map: dict) -> str | None:
+        """Walk parent chain to find page title from route."""
+        visited = set()
+        p = uid_
+        while p and p not in visited:
+            visited.add(p)
+            pm = uid_map.get(p)
+            if not pm:
+                break
+            p = pm.get("parentId", "")
+
+        # The topmost parent's parent should be a tab UID → find route
+        try:
+            routes = self._get_json(
+                "api/desktopRoutes:list?paginate=false&tree=true") or []
+            # Collect all route titles keyed by schemaUid
+            title_map = {}
+
+            def _walk(rts):
+                for rt in rts:
+                    for ch in rt.get("children", []):
+                        su = ch.get("schemaUid")
+                        if su:
+                            title_map[su] = rt.get("title", "")
+                        _walk(ch.get("children", []))
+                    _walk(rt.get("children", []))
+            _walk(routes)
+
+            # Check which tab UID in our parent chain
+            for v in visited:
+                if v in title_map:
+                    return title_map[v]
+        except Exception:
+            pass
+        return None
+
+    def _format_form_task_table(self, results: list) -> str:
+        """Generate markdown task table from form assessment results."""
+        lines = ["## Form Refinement Tasks\n",
+                 "| # | Page | Type | Table UID | Collection | Fields | Coverage | Sections | Status |",
+                 "|---|------|------|-----------|-----------|--------|----------|----------|--------|"]
+
+        for i, r in enumerate(results, 1):
+            total = r["total_fields"]
+            count = r["field_count"]
+            pct = f"{count}/{total} ({count*100//total}%)" if total else "0/0"
+            sect = "yes" if r.get("has_sections") else "no"
+            tuid = r["table_uid"][:8] + "..."
+            lines.append(
+                f"| {i} | {r['page']} | {r['form_type']} | {tuid} | "
+                f"{r['collection']} | {pct} | {r['status']} | {sect} | {r['status']} |")
+
+        # Add context for [todo] tasks
+        todos = [r for r in results if r["status"] == "[todo]"]
+        if todos:
+            lines.append("\n### Context for [todo] tasks:\n")
+            for r in todos:
+                lines.append(f"#### {r['page']} {r['form_type']} ({r['table_uid'][:12]}...)")
+                lines.append(f"Collection: {r['collection']}")
+                avail = r.get("available_fields", [])
+                current = r.get("fields", [])
+                missing = [f for f in avail if f not in current]
+                if current:
+                    lines.append(f"Current fields: {', '.join(current)}")
+                if missing:
+                    lines.append(f"Missing fields: {', '.join(missing)}")
+                lines.append(f"Tip: Use sections: --- 基本信息, --- 联系方式, --- 分类信息\n")
+
+        return "\n".join(lines)
+
+    def find_placeholders(self, scope: str) -> list[dict]:
+        """Find JS placeholder nodes under a scope (tab UID or title prefix).
+
+        Similar to find_outlines() but searches for __placeholder__ marker
+        instead of __outline__. Returns richer info including kind and desc.
+
+        Args:
+            scope: Tab UID, or a title prefix to match across all pages
+
+        Returns:
+            List of dicts: {uid, kind, title, desc, field, collection, parent_uid, use}
+        """
+        all_models = self._list_all()
+        uid_map = {m["uid"]: m for m in all_models}
+
+        # Determine target scope
+        target_uids = None
+        if scope in uid_map:
+            target_uids = set(self._collect_descendants(scope))
+            target_uids.add(scope)
+        else:
+            try:
+                routes = self._get_json(
+                    "api/desktopRoutes:list?paginate=false&tree=true") or []
+                tab_uids = set()
+
+                def _collect_tab_uids(rts):
+                    for rt in rts:
+                        rtype = rt.get("type", "")
+                        if rtype == "group":
+                            _collect_tab_uids(rt.get("children", []))
+                        elif rtype == "flowPage":
+                            for ch in rt.get("children", []):
+                                if ch.get("type") == "tabs":
+                                    csu = ch.get("schemaUid")
+                                    if csu:
+                                        tab_uids.add(csu)
+
+                for rt in routes:
+                    if rt.get("title", "").upper().startswith(scope.upper()):
+                        _collect_tab_uids(rt.get("children", []))
+
+                if tab_uids:
+                    target_uids = set()
+                    for tu in tab_uids:
+                        target_uids.add(tu)
+                        target_uids.update(self._collect_descendants(tu))
+            except Exception:
+                pass
+
+        results = []
+        for m in all_models:
+            if target_uids is not None and m["uid"] not in target_uids:
+                continue
+
+            sp = m.get("stepParams", {})
+            use = m.get("use", "")
+            parent_uid = m.get("parentId", "")
+
+            # Check JS code for __placeholder__
+            code = sp.get("jsSettings", {}).get("runJs", {}).get("code", "")
+            is_js_placeholder = "__placeholder__" in code
+
+            # Check flowRegistry for event placeholders
+            registry = m.get("flowRegistry", {}) or {}
+            event_placeholders = []
+            for fk, fv in registry.items():
+                steps = fv.get("steps", {})
+                for sk, sv in steps.items():
+                    step_code = sv.get("defaultParams", {}).get("code", "")
+                    if "__placeholder__" in step_code:
+                        event_placeholders.append({
+                            "flow_key": fk,
+                            "event": fv.get("on", {}).get("eventName", ""),
+                            "code": step_code,
+                        })
+
+            if not is_js_placeholder and not event_placeholders:
+                continue
+
+            # Find collection from parent chain
+            collection = ""
+            visited = set()
+            p = parent_uid
+            while p and p not in visited:
+                visited.add(p)
+                pm = uid_map.get(p)
+                if not pm:
+                    break
+                rs = pm.get("stepParams", {}).get("resourceSettings", {}).get("init", {})
+                if rs.get("collectionName"):
+                    collection = rs["collectionName"]
+                    break
+                p = pm.get("parentId", "")
+
+            if is_js_placeholder:
+                # Extract info from JS code
+                import re
+                info = {}
+                try:
+                    match = re.search(r'const info = (\{.*?\});', code, re.DOTALL)
+                    if match:
+                        info = json.loads(match.group(1))
+                except Exception:
+                    pass
+
+                # Separate known keys from extra metadata
+                _known = {"__placeholder__", "kind", "title", "desc", "field", "col_type"}
+                extra_meta = {k: v for k, v in info.items() if k not in _known}
+
+                results.append({
+                    "uid": m["uid"],
+                    "use": use,
+                    "kind": info.get("kind", "unknown"),
+                    "title": info.get("title", ""),
+                    "desc": info.get("desc", ""),
+                    "field": info.get("field", ""),
+                    "col_type": info.get("col_type", ""),
+                    "meta": extra_meta,
+                    "collection": collection,
+                    "parent_uid": parent_uid,
+                })
+
+            for ep in event_placeholders:
+                info = {}
+                try:
+                    import re
+                    match = re.search(r'// (\{.*?"__placeholder__".*?\})', ep["code"])
+                    if match:
+                        info = json.loads(match.group(1))
+                except Exception:
+                    pass
+
+                results.append({
+                    "uid": m["uid"],
+                    "use": use,
+                    "kind": "event",
+                    "title": f"{ep['event']} on {use}",
+                    "desc": info.get("desc", ""),
+                    "field": "",
+                    "event": ep["event"],
+                    "flow_key": ep["flow_key"],
+                    "collection": collection,
+                    "parent_uid": parent_uid,
+                })
+
+        return results
+
+    def inject_js(self, uid_: str, code: str) -> bool:
+        """Replace placeholder JS with real implementation.
+
+        Auto-detects node type (JSColumnModel/JSBlockModel/JSItemModel).
+        Preserves title/width and other settings.
+        For event placeholders, use inject_event() instead.
+
+        Args:
+            uid_: UID of the placeholder node
+            code: Real JS code to inject
+
+        Returns:
+            True on success
+        """
+        return self.update_js(uid_, code)
+
+    def inject_event(self, uid_: str, event_name: str, code: str) -> bool:
+        """Replace placeholder event flow with real implementation.
+
+        Finds the placeholder flow for the given event_name and replaces its code.
+
+        Args:
+            uid_: UID of the model node containing the event
+            event_name: Event name (e.g. "formValuesChange")
+            code: Real JS code for the event
+
+        Returns:
+            True on success
+        """
+        data = self._get_json(f"api/flowModels:get?filterByTk={uid_}")
+        if not data:
+            return False
+
+        registry = data.get("flowRegistry", {}) or {}
+        found = False
+        for fk, fv in registry.items():
+            if fv.get("on", {}).get("eventName") == event_name:
+                for sk, sv in fv.get("steps", {}).items():
+                    step_code = sv.get("defaultParams", {}).get("code", "")
+                    if "__placeholder__" in step_code:
+                        sv["defaultParams"]["code"] = code
+                        fv["title"] = event_name
+                        found = True
+                        break
+                if found:
+                    break
+
+        if not found:
+            return False
+
+        return self.update(uid_, {"flowRegistry": registry})
+
+    # ── Auto JS ────────────────────────────────────────────────
+
+    def auto_js(self, scope: str, output_dir: str = "js/",
+                templates_dir: str | None = None) -> dict:
+        """Auto-generate JS files from placeholders + templates.
+
+        For columns with known type and matching template: fills template with
+        metadata (field, subs, threshold, etc.) and writes ready-to-inject JS.
+        For blocks/items/events: writes stub files with description as comments.
+
+        Args:
+            scope: Tab UID or title prefix (e.g. "CRM")
+            output_dir: Directory to write JS files
+            templates_dir: Directory containing col-*.js templates
+
+        Returns:
+            Dict with auto/manual lists and markdown task table.
+        """
+        placeholders = self.find_placeholders(scope)
+
+        # Read templates
+        templates: dict[str, str] = {}
+        if templates_dir and os.path.isdir(templates_dir):
+            for fname in os.listdir(templates_dir):
+                if fname.endswith('.js'):
+                    with open(os.path.join(templates_dir, fname)) as f:
+                        templates[fname] = f.read().strip()
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        auto: list[dict] = []
+        manual: list[dict] = []
+
+        for p in placeholders:
+            uid_ = p["uid"]
+            kind = p["kind"]
+            title = p.get("title", "")
+            desc = p.get("desc", "")
+            field = p.get("field", "")
+            col_type = p.get("col_type", "")
+            meta = p.get("meta", {})
+            collection = p.get("collection", "")
+
+            # --- Columns: auto-fill from template ---
+            if kind == "column" and col_type:
+                tpl_name = f"col-{col_type}.js"
+                if tpl_name in templates:
+                    code = templates[tpl_name]
+                    code = code.replace("{FIELD}", field)
+                    if col_type == "composite":
+                        code = code.replace("{TITLE}", field)
+                        subs = meta.get("subs", "")
+                        if subs:
+                            subs_js = ",".join(
+                                f'"{s.strip()}"' for s in subs.split(",")
+                            )
+                        else:
+                            subs_js = ""
+                        code = code.replace("{SUBS}", subs_js)
+                    elif col_type == "currency":
+                        threshold = str(meta.get("threshold", 100000))
+                        code = code.replace("{THRESHOLD}", threshold)
+                    elif col_type == "comparison":
+                        code = code.replace("{TARGET}",
+                                            meta.get("target", field))
+                        code = code.replace("{ACTUAL}",
+                                            meta.get("actual", field))
+                    fpath = os.path.join(output_dir, f"{uid_}.js")
+                    with open(fpath, "w") as f:
+                        f.write(code)
+                    auto.append({
+                        "uid": uid_, "kind": f"column/{col_type}",
+                        "title": title, "template": tpl_name,
+                        "file": os.path.basename(fpath),
+                        "collection": collection,
+                    })
+                    continue
+
+            # --- Events: write stub with metadata ---
+            if kind == "event":
+                event_name = p.get("event", "formValuesChange")
+                fname = f"{uid_}__evt__{event_name}.js"
+                fpath = os.path.join(output_dir, fname)
+                with open(fpath, "w") as f:
+                    f.write(
+                        f"// TODO: {title}\n"
+                        f"// {desc}\n"
+                        f"// Collection: {collection}\n"
+                    )
+                manual.append({
+                    "uid": uid_, "kind": f"event/{event_name}",
+                    "title": title, "desc": desc,
+                    "file": os.path.basename(fpath),
+                    "collection": collection,
+                })
+                continue
+
+            # --- Blocks / Items: write stub ---
+            fpath = os.path.join(output_dir, f"{uid_}.js")
+            with open(fpath, "w") as f:
+                f.write(
+                    f"// TODO: {title}\n"
+                    f"// {desc}\n"
+                    f"// Collection: {collection}\n"
+                    f"// Kind: {kind}\n"
+                )
+            manual.append({
+                "uid": uid_, "kind": kind,
+                "title": title, "desc": desc,
+                "file": os.path.basename(fpath),
+                "collection": collection,
+            })
+
+        # Build markdown task table
+        lines = [
+            "### JS Tasks\n",
+            "| # | UID | Kind | Title | Collection | Template | Status |",
+            "|---|-----|------|-------|------------|----------|--------|",
+        ]
+        n = 0
+        for item in auto:
+            n += 1
+            lines.append(
+                f"| {n} | {item['uid']} | {item['kind']} | "
+                f"{item['title']} | {item['collection']} | "
+                f"{item['template']} | [auto] |"
+            )
+        for item in manual:
+            n += 1
+            lines.append(
+                f"| {n} | {item['uid']} | {item['kind']} | "
+                f"{item['title']} | {item['collection']} | "
+                f"— | [todo] |"
+            )
+
+        return {
+            "auto": auto,
+            "manual": manual,
+            "task_table": "\n".join(lines),
+            "total": len(auto) + len(manual),
+            "auto_count": len(auto),
+            "manual_count": len(manual),
+        }
+
+    # ── Page Map ───────────────────────────────────────────────
+
+    def page_map(self, scope: str) -> str:
+        """Generate an HTML map showing page structure with UIDs.
+
+        Traverses the FlowModel tree under a scope and generates an HTML file
+        that visually shows each node with its UID, type, and key info.
+        Useful for debugging and as a UID lookup reference.
+
+        Args:
+            scope: Title prefix (e.g. "CRM") to match route groups
+
+        Returns:
+            HTML string with the page map
+        """
+        import html as html_mod
+
+        # Collect routes under scope
+        routes = self._get_json("api/desktopRoutes:list?paginate=false&tree=true") or []
+        pages = []  # [(title, tab_uid)]
+
+        def collect_children(rts):
+            """Recurse into all children once inside matched scope."""
+            for rt in rts:
+                title = rt.get("title") or ""
+                rtype = rt.get("type") or ""
+                if rtype == "group":
+                    collect_children(rt.get("children", []))
+                elif rtype == "flowPage":
+                    # Content lives under the "tabs" child, not the flowPage itself
+                    for ch in rt.get("children", []):
+                        if ch.get("type") == "tabs":
+                            tu = ch.get("schemaUid")
+                            if tu:
+                                pages.append((title, tu))
+                                break
+                    else:
+                        su = rt.get("schemaUid")
+                        if su:
+                            pages.append((title, su))
+
+        for rt in routes:
+            title = rt.get("title") or ""
+            if title.upper().startswith(scope.upper()):
+                collect_children(rt.get("children", []))
+
+        if not pages:
+            return f"<html><body><p>No pages found for scope '{scope}'</p></body></html>"
+
+        # Load all models once
+        all_models = self._list_all()
+        uid_map = {m["uid"]: m for m in all_models}
+        children_map: dict[str, list] = {}
+        for m in all_models:
+            pid = m.get("parentId", "")
+            if pid:
+                children_map.setdefault(pid, []).append(m)
+
+        # Type display info
+        type_styles = {
+            "TableBlockModel": ("Table", "#1890ff", "table"),
+            "TableColumnModel": ("Col", "#8c8c8c", "field"),
+            "TableActionsColumnModel": ("Actions", "#8c8c8c", "field"),
+            "JSColumnModel": ("JS Col", "#722ed1", "js"),
+            "JSBlockModel": ("JS Block", "#722ed1", "js"),
+            "JSItemModel": ("JS Item", "#722ed1", "js"),
+            "FilterFormModel": ("Filter", "#13c2c2", "block"),
+            "CreateFormModel": ("Add Form", "#52c41a", "form"),
+            "EditFormModel": ("Edit Form", "#fa8c16", "form"),
+            "DetailsBlockModel": ("Details", "#2f54eb", "block"),
+            "ChildPageModel": ("Popup", "#595959", "popup"),
+            "ChildPageTabModel": ("Tab", "#595959", "tab"),
+            "BlockGridModel": ("Grid", "#d9d9d9", "grid"),
+            "KPIBlockModel": ("KPI", "#eb2f96", "block"),
+            "AddNewActionModel": ("AddNew Btn", "#52c41a", "action"),
+            "EditActionModel": ("Edit Btn", "#fa8c16", "action"),
+        }
+
+        def node_html(m, depth=0) -> str:
+            uid_ = m["uid"]
+            use = m.get("use", "")
+            sp = m.get("stepParams", {})
+            parts = []
+
+            # Type label + color
+            tinfo = type_styles.get(use, (use.replace("Model", ""), "#595959", "other"))
+            label, color, category = tinfo
+
+            # Skip layout/leaf nodes that add noise
+            skip_prefixes = (
+                "FormGrid", "DetailGrid", "DetailsGrid",
+                "Display", "FormItem", "FilterFormItem",
+                "DetailsItem", "FormSubmitAction", "RefreshAction",
+                "RootPage", "FilterFormGrid", "FilterFormBlock",
+                "FilterAction",
+            )
+            if use.replace("Model", "").startswith(skip_prefixes) or use.startswith(skip_prefixes):
+                return ""
+
+            # Extract useful info
+            info_parts = []
+            rs = sp.get("resourceSettings", {}).get("init", {})
+            coll = rs.get("collectionName", "")
+            assoc = rs.get("association", "")
+            if coll:
+                info_parts.append(f"collection={coll}")
+            if assoc:
+                info_parts.append(f"assoc={assoc}")
+
+            # Field path (TableColumnModel)
+            fs = sp.get("fieldSettings", {}).get("init", {})
+            field_path = fs.get("fieldPath", "")
+            if field_path:
+                info_parts.append(f"field={field_path}")
+
+            # Title from various sources
+            title = ""
+            if "cardSettings" in sp:
+                title = sp["cardSettings"].get("titleDescription", {}).get("title", "")
+            elif "tableColumnSettings" in sp:
+                title = sp["tableColumnSettings"].get("title", {}).get("title", "")
+            elif "editItemSettings" in sp:
+                title = sp["editItemSettings"].get("showLabel", {}).get("title", "")
+            elif "pageTabSettings" in sp:
+                title = sp["pageTabSettings"].get("tab", {}).get("title", "")
+
+            # Placeholder detection
+            js_code = sp.get("jsSettings", {}).get("runJs", {}).get("code", "")
+            is_placeholder = "__placeholder__" in js_code
+            placeholder_cls = " placeholder" if is_placeholder else ""
+            if is_placeholder:
+                # Extract desc
+                import re
+                match = re.search(r'"desc"\s*:\s*"([^"]*)"', js_code)
+                if match:
+                    info_parts.append(f'desc="{match.group(1)}"')
+
+            # Event flows
+            registry = m.get("flowRegistry") or {}
+            for fk, fv in registry.items():
+                evt = fv.get("on", {}).get("eventName", "")
+                if evt:
+                    evt_code = ""
+                    for sk, sv in fv.get("steps", {}).items():
+                        evt_code = sv.get("defaultParams", {}).get("code", "")
+                    is_evt_ph = "__placeholder__" in evt_code
+                    tag = "placeholder" if is_evt_ph else "implemented"
+                    info_parts.append(f'event={evt} [{tag}]')
+
+            title_html = f" <b>{html_mod.escape(title)}</b>" if title else ""
+            info_html = f' <span class="info">{html_mod.escape(", ".join(info_parts))}</span>' if info_parts else ""
+
+            indent = depth * 20
+            parts.append(
+                f'<div class="node {category}{placeholder_cls}" style="margin-left:{indent}px">'
+                f'<span class="type" style="background:{color}">{label}</span>'
+                f'<code class="uid" title="Click to copy" onclick="navigator.clipboard.writeText(\'{uid_}\')">{uid_}</code>'
+                f'{title_html}{info_html}'
+                f'</div>'
+            )
+
+            # Recurse into children (sorted by sort)
+            children = children_map.get(uid_, [])
+            children.sort(key=lambda c: c.get("sort", 0))
+            for child in children:
+                child_html = node_html(child, depth + 1)
+                if child_html:
+                    parts.append(child_html)
+
+            return "\n".join(parts)
+
+        # Build page sections
+        page_sections = []
+        for page_title, tab_uid in pages:
+            # Find the root model(s) under this tab
+            tab_children = children_map.get(tab_uid, [])
+            nodes_html = []
+            for child in tab_children:
+                h = node_html(child, 0)
+                if h:
+                    nodes_html.append(h)
+
+            page_sections.append(
+                f'<div class="page">'
+                f'<h2>{html_mod.escape(page_title)} <code class="uid">{tab_uid}</code></h2>'
+                f'{"".join(nodes_html)}'
+                f'</div>'
+            )
+
+        return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{scope} Page Map</title>
+<style>
+body {{ font-family: -apple-system, 'Segoe UI', sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #fafafa; }}
+h1 {{ color: #1a1a1a; border-bottom: 2px solid #1890ff; padding-bottom: 8px; }}
+h2 {{ color: #262626; margin-top: 24px; padding: 8px 12px; background: #fff; border-left: 4px solid #1890ff; }}
+.page {{ background: #fff; padding: 16px; margin: 12px 0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
+.node {{ padding: 3px 0; font-size: 13px; white-space: nowrap; }}
+.node.js {{ background: #f9f0ff; margin: 2px 0; padding: 3px 6px; border-radius: 4px; }}
+.node.placeholder {{ border-left: 3px solid #722ed1; background: #f0e6ff; }}
+.type {{ color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-right: 4px; }}
+.uid {{ font-size: 11px; color: #1890ff; background: #e6f7ff; padding: 1px 4px; border-radius: 2px; cursor: pointer; margin-right: 4px; }}
+.uid:hover {{ background: #1890ff; color: #fff; }}
+.info {{ color: #8c8c8c; font-size: 11px; }}
+b {{ color: #262626; }}
+</style></head>
+<body>
+<h1>{scope} — Page Map (UID Index)</h1>
+<p style="color:#8c8c8c">Click any <code class="uid">uid</code> to copy. Purple nodes = JS (placeholder/implemented).</p>
+{"".join(page_sections)}
+</body></html>"""
 
     # ── AI Employee ────────────────────────────────────────────
 

@@ -1,16 +1,30 @@
 # JS Templates Index
 
 Each file contains one JS code template with `{PLACEHOLDER}` markers.
-Read the template you need, replace placeholders with real values, then call MCP.
+Read the template you need, replace placeholders with real values, then call `nb_inject_js(uid, code)`.
 
-## Column Templates — `nb_js_column(table_uid, title, code, width)`
+## Phase 2 Workflow
+
+After building pages with `nb_page_markup` (Phase 1), all JS nodes are placeholders.
+Use this workflow to implement them:
+
+```
+1. nb_find_placeholders("PREFIX")  →  list of {uid, kind, title, desc, field, collection}
+2. For each placeholder:
+   a. Match kind + desc to a template below
+   b. Read the template file
+   c. Replace {PLACEHOLDER} with real values
+   d. nb_inject_js(uid, filled_code)
+   e. nb_read_node(uid, "js")  →  verify
+```
+
+## Column Templates — `nb_inject_js(uid, code)`
 
 Render custom content per table row. `ctx.record` available.
 
 **Rules:**
 - Do NOT use JS columns for select/enum fields (等级/状态/类型/优先级) — NocoBase renders colored tags natively
 - DO use JS columns to make tables look **rich and informative**, matching the HTML prototype column designs
-- **Read the HTML prototypes** — every `<td>` with nested `<div>` elements = needs a JS column
 
 ### ★ col-composite.js — THE primary column template (use on every main entity)
 
@@ -27,8 +41,6 @@ Every business entity's **primary name/title column** should be composite: bold 
 | 产品 | `name` | `"category","spec"` | 200 |
 
 Placeholders: `{TITLE}` = main field name, `{SUBS}` = JS string: `"field1","field2"` (supports 1-3 sub-fields)
-
-**Example**: 客户名称 → `TITLE=name`, `SUBS="city","source"` → renders: **华为技术有限公司** / 深圳 · 转介绍
 
 ### Other column templates
 
@@ -52,7 +64,7 @@ Read the HTML prototype `<table>` section. For each column:
 6. `<td>` with **stars** → `col-stars.js`
 7. `<td>` with **just a tag/badge** → skip (NocoBase native select rendering)
 
-## Block Templates — `nb_js_block(parent, title, code)`
+## Block Templates — `nb_inject_js(uid, code)`
 
 Page-level blocks: KPI dashboards, distribution charts, financial summaries, alert panels.
 Async, `ctx.api` + `ctx.antd` available.
@@ -64,7 +76,7 @@ Async, `ctx.api` + `ctx.antd` available.
 | `block-financial.js` | Aggregate by group (bar chart) | `{COLLECTION}`, `{GROUP_FIELD}`, `{VALUE_FIELD}`, `{APPENDS}`, `{TITLE}` |
 | `block-alert.js` | Expiring/overdue items list | `{COLLECTION}`, `{DATE_FIELD}`, `{NAME_FIELD}`, `{DAYS}`, `{TITLE}` |
 
-**Sidebar blocks** — same tool (`nb_js_block`), designed for page sidebar area:
+**Sidebar blocks** — same tool, designed for page sidebar area:
 
 | File | Type | Placeholders |
 |------|------|-------------|
@@ -72,7 +84,7 @@ Async, `ctx.api` + `ctx.antd` available.
 | `sidebar-grid.js` | 2x2 grid counts | `{COLLECTION}`, `{FIELD}`, `{COLOR_MAP}` |
 | `sidebar-pipeline.js` | Funnel/pipeline | `{COLLECTION}`, `{FIELD}`, `{STAGE_ORDER}` |
 
-## Item Templates — `nb_js_item(grid_uid, title, code)`
+## Item Templates — `nb_inject_js(uid, code)`
 
 Custom content inside detail views or forms. `ctx.record` available in detail context.
 
@@ -82,7 +94,7 @@ Custom content inside detail views or forms. `ctx.record` available in detail co
 | `item-stats.js` | 2-4 computed statistics | `{STATS}` |
 | `item-gauge.js` | Progress circle with label | `{VALUE_FIELD}`, `{TOTAL_FIELD}`, `{LABEL}` |
 
-## Event Templates — `nb_event_flow(form_uid, event_name, code)`
+## Event Templates — `nb_inject_js(uid, code, event_name="...")`
 
 Form event handlers. Three event types:
 - `formValuesChange` — when any field changes (auto-calc, validation, cascading)

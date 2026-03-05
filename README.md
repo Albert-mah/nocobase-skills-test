@@ -16,7 +16,7 @@ Let AI agents (Claude Code, etc.) operate NocoBase directly — data modeling, p
 │  │             │    │ nb_create_workflow      │ │
 │  │ page-       │    │ nb_create_ai_employee   │ │
 │  │ building    │    │ nb_inspect_all          │ │
-│  │             │    │ ...55 tools             │ │
+│  │             │    │ ...63 tools             │ │
 │  │ ai-employee │    │                         │ │
 │  └────────────┘    └───────────┬──────────────┘ │
 └────────────────────────────────┼────────────────┘
@@ -34,8 +34,10 @@ Let AI agents (Claude Code, etc.) operate NocoBase directly — data modeling, p
                       └─────────────────────┘
 ```
 
-- **MCP Server** = Capability layer — 55 API tools (atomic + batch)
+- **MCP Server** = Capability layer — 63 API tools (atomic + batch)
 - **Skills** = Knowledge layer — guide AI to use tools in correct workflow order
+- **Skill Base** = Orchestration layer — `examples/skills/README.md` — lets any cluster-capable agent build a complete system from requirements
+- **Templates** = Reusable snippets — 21 templates (JS columns, page layouts, workflows) with `{PLACEHOLDER}` markers
 - **Examples** = Reference implementations — complete demo systems with scripts
 
 ## Prerequisites: NocoBase Environment
@@ -197,9 +199,9 @@ You: Build pages for the project management module.
 Agent: (creates menu → builds each page with tables, forms, KPIs, popups)
 ```
 
-## MCP Tools (55)
+## MCP Tools (63)
 
-### Data Modeling (10)
+### Data Modeling (11)
 | Tool | Description |
 |------|-------------|
 | `nb_setup_collection` | **Batch**: register + sync + upgrade + relations in one call (idempotent) |
@@ -210,6 +212,7 @@ Agent: (creates menu → builds each page with tables, forms, KPIs, popups)
 | `nb_sync_fields` | Sync DB columns + create system fields (debounced) |
 | `nb_upgrade_field` | Change field interface (input -> select, etc.) |
 | `nb_create_relation` | Create m2o/o2m/m2m/o2o relation |
+| `nb_fields` | Show fields + enum values for a collection (essential before page building) |
 | `nb_list_collections` | List registered collections |
 | `nb_list_fields` | List fields of a collection |
 
@@ -222,10 +225,23 @@ Agent: (creates menu → builds each page with tables, forms, KPIs, popups)
 | `nb_list_routes` | Show menu tree |
 | `nb_delete_route` | Delete menu item |
 
-### Page Building (14)
+### Page Building — Compose (4)
+
+Free-form page composition: any blocks, any layout. Build entire pages in memory, submit once.
+
 | Tool | Description |
 |------|-------------|
-| `nb_crud_page` | **Batch**: complete CRUD page (KPI + filter + table + forms + popup) in one call |
+| `nb_compose_page` | **Primary**: build a page from free-form block definitions (table, filter, form, detail, js, kpi, outline) |
+| `nb_compose_page_file` | **Batch**: build multiple pages from a JSON file |
+| `nb_crud_page` | Quick CRUD page (KPI + filter + table + forms + popup) in one call |
+| `nb_crud_page_file` | Batch CRUD pages from a JSON file |
+
+### Page Building — Atomic (12)
+
+Individual block builders for fine-grained control:
+
+| Tool | Description |
+|------|-------------|
 | `nb_page_layout` | Initialize page grid (idempotent) |
 | `nb_table_block` | Create data table |
 | `nb_addnew_form` | Create "Add New" form |
@@ -233,12 +249,23 @@ Agent: (creates menu → builds each page with tables, forms, KPIs, popups)
 | `nb_detail_popup` | Create detail popup with tabs |
 | `nb_filter_form` | Create search/filter bar |
 | `nb_kpi_block` | Create KPI statistic card |
-| `nb_js_block` | Create custom JS block |
+| `nb_js_block` | Create custom JS block on page |
 | `nb_js_column` | Create custom JS table column |
+| `nb_js_item` | Create custom JS item in detail/form grid |
 | `nb_set_layout` | Arrange blocks in grid |
 | `nb_clean_tab` | Clear page content |
-| `nb_outline` | Create planning placeholder block |
-| `nb_event_flow` | Add form event flow (formValuesChange) |
+
+### Page Building — JS Enhancement (5)
+
+Post-build tools for adding/updating JavaScript rendering. Designed for a parallel "JS agent" workflow.
+
+| Tool | Description |
+|------|-------------|
+| `nb_outline` | Create planning placeholder (block/column/item) for later JS implementation |
+| `nb_update_js` | Update JS code on existing JSBlockModel/JSColumnModel/JSItemModel |
+| `nb_find_outlines` | Discover all outline placeholders under a tab or menu prefix |
+| `nb_js_enhance_file` | **Batch**: apply JS enhancements (add/update/delete) from a JSON file |
+| `nb_event_flow` | Add form event flow (formValuesChange, beforeRender) |
 
 ### Page Inspection & Maintenance (12)
 | Tool | Description |
@@ -351,7 +378,7 @@ This has been tested with both **Claude Code (Sonnet)** and **Kimi Code (Kimi 2.
 
 | System | Tables | Pages | Workflows | AI Employees | Tested With |
 |--------|--------|-------|-----------|--------------|-------------|
-| CRM (客户关系管理) | 16 | 12 | 6 | 3 | Claude, Kimi |
+| CRM (客户关系管理) | 16 | 15 | 6 | 3 | Claude, Kimi |
 | HRM (人力资源管理) | 14 | 10 | 5 | 2 | Claude, Kimi |
 | EDU (教务管理) | 13 | 12 | 5 | 2 | Claude |
 | ITSM (IT服务管理) | 13 | 10 | 5 | 2 | Kimi |
@@ -401,6 +428,63 @@ See `examples/prompts/` for prompt templates. A prompt file defines:
 - **Test Data**: record counts per table
 
 The CLAUDE.md file provides tool usage rules that work across all agents.
+
+### Two-Phase Build (Advanced)
+
+For complex pages with rich JS rendering (charts, color tags, progress bars), use a two-phase approach:
+
+1. **Phase A** — Structure + outline placeholders: `nb_compose_page` with `type:"outline"` blocks
+2. **Phase B** — JS enhancement: a second agent reads HTML prototypes → `nb_find_outlines` → `nb_update_js`
+
+See `examples/prompts/build-from-html.md` (Phase A) and `examples/prompts/js-enhance-prompt.md` (Phase B).
+JS code patterns reference: `examples/prompts/js-sandbox-reference.md`.
+
+#### Phase B: Multi-Agent JS Enhancement
+
+Phase B can involve 30+ independent JS blocks. A single agent will exhaust its context window before finishing. The recommended architecture uses a **coordinator + N subagents** pattern:
+
+```
+Coordinator (js-enhance-agent.yaml)
+  ├── spec-reader subagent — reads HTML prototypes, writes compact spec (~5KB)
+  ├── column-batch-1 subagent — 3 columns for table X
+  ├── column-batch-2 subagent — 4 columns for table Y
+  ├── sidebar-block-1 subagent — one outline UID
+  ├── sidebar-block-2 subagent — one outline UID
+  ├── ...
+  └── event-flow-1 subagent — one form event
+```
+
+Key files in `examples/prompts/`:
+- `js-enhance-agent.yaml` — Coordinator agent definition
+- `js-enhance-coordinator.md` — Coordinator system prompt (orchestration logic)
+- `js-sub-batch-executor.yaml` / `js-sub-batch-executor-prompt.md` — Worker subagent with all JS code templates
+- `js-sub-spec-reader.yaml` / `js-sub-spec-reader-prompt.md` — Spec extraction subagent
+
+#### Lessons Learned (Kimi + MCP Multi-Agent)
+
+**Problem 1: Context overflow with HTML prototypes**
+- 6 HTML files (~130KB total) exhausted the agent's context window before any MCP calls
+- **Fix**: Extract a compact spec file first (~5KB) with all UIDs pre-mapped, then pass only the spec to workers
+- See `examples/workdirs/crm/js-enhancements-spec.md` for the format
+
+**Problem 2: MCP server CWD ≠ agent workdir**
+- Agent calls `nb_js_enhance_file("batch1.json")` but MCP server runs from a different directory
+- **Fix**: Added `NB_WORKDIR` env var + `resolve_file()` utility that tries absolute → NB_WORKDIR-relative → CWD-relative
+- Set `NB_WORKDIR` in `.mcp.json` to your agent's working directory
+
+**Problem 3: Single agent can't finish all JS blocks**
+- One agent doing 19 columns + 16 sidebar blocks + 6 event flows runs out of steps/context
+- **Fix**: Maximum granularity — one subagent per outline UID, columns grouped by table. Each subagent gets only its UID + description + one code pattern
+- Coordinator spawns all subagents in parallel for ~30 concurrent MCP calls
+
+**Problem 4: Batch file tool missing action types**
+- `nb_js_enhance_file` originally only supported `add_column`/`add_block`/`add_item`/`delete`
+- Event flows and JS updates couldn't be batched
+- **Fix**: Added `add_event` action (calls `nb_event_flow`) and `update_js` alias (calls `nb_update_js`)
+
+**Validated result** (CRM, Kimi 2.5 with cluster mode):
+~25 subagents ran in parallel — 6 column batches + 16 sidebar blocks + 3 event flows.
+Coordinator context usage: 9%. Wall time: ~3 minutes. All JS blocks verified via `nb_inspect_all("CRM")`.
 
 ## Environment Variables
 

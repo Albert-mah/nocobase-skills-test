@@ -86,7 +86,7 @@ MODEL_DEFS: dict[str, dict[str, Any]] = {
         "category": "page",
         "sub_models": {"tabs": "array"},
         "default_step_params": {
-            "pageSettings": {"general": {"displayTitle": False, "enableTabs": False}}
+            "pageSettings": {"general": {"displayTitle": False, "enableTabs": True}}
         },
     },
     "ChildPageTabModel": {
@@ -267,7 +267,7 @@ STEP_PARAMS_TEMPLATES: dict[str, Any] = {
     "filter_layout_horizontal": {
         "formFilterBlockModelSettings": {"layout": {
             "layout": "horizontal", "labelAlign": "left",
-            "labelWidth": 50, "labelWrap": False, "colon": True}}
+            "labelWidth": 100, "labelWrap": False, "colon": True}}
     },
     "js_code": lambda code: {
         "jsSettings": {"runJs": {"version": "v1", "code": code}}
@@ -279,7 +279,7 @@ STEP_PARAMS_TEMPLATES: dict[str, Any] = {
             "borderColor": "rgba(5, 5, 5, 0.06)"}}
     },
     "page_no_title": {
-        "pageSettings": {"general": {"displayTitle": False, "enableTabs": False}}
+        "pageSettings": {"general": {"displayTitle": False, "enableTabs": True}}
     },
     "page_with_tabs": {
         "pageSettings": {"general": {"displayTitle": False, "enableTabs": True}}

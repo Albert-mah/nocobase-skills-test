@@ -2,9 +2,9 @@ Build a CRM (Customer Relationship Management) system in NocoBase.
 
 ## Tables (prefix: nb_crm_)
 
-1. customers — 客户 (name, phone, email, address, industry, source, status[新客户/跟进中/已签约/流失], level[A/B/C/D], remark)
+1. customers — 客户 (name, phone, email, address, industry[制造业/互联网/金融/医疗/教育/零售/其他], source[官网/展会/转介绍/电话/广告/其他], status[新客户/跟进中/已签约/流失], level[A/B/C/D], remark)
 2. contacts — 联系人 (name, phone, email, position, is_primary:boolean; m2o→customers)
-3. leads — 线索 (name, phone, email, company, source, status[新线索/跟进中/已转化/无效], remark)
+3. leads — 线索 (name, phone, email, company, source[官网/展会/转介绍/电话/广告/其他], status[新线索/跟进中/已转化/无效], remark)
 4. lead_pool — 公海池 (reason, recycled_at:date; m2o→leads)
 5. opportunities — 商机 (title, amount:decimal, stage[初步接洽/需求确认/方案报价/商务谈判/赢单/输单], probability:integer, expected_close_date:date, actual_close_date:date, source, competitor, loss_reason, remark; m2o→customers, m2o→contacts)
 6. quotes — 报价 (title, amount:decimal, discount_rate:decimal, final_amount:decimal, valid_until:date, status[草稿/已发送/已确认/已过期], remark; m2o→customers, m2o→opportunities)
@@ -29,19 +29,37 @@ Build a CRM (Customer Relationship Management) system in NocoBase.
 
 Standalone pages: 跟进记录, 产品, 竞争对手, 销售目标
 
-## Phase 6: JS Enhancement
+## Page Types (IMPORTANT — determines what blocks each page gets)
 
-For each list page, create **business-relevant JS blocks** that help operators make decisions. Think about what a sales manager, account manager, or support lead needs to see at a glance on each page. Use antd components creatively (Statistic, Progress, Timeline, Steps, Descriptions, Alert, Table for mini-reports). Don't just show a count — show distributions, comparisons, trends, and anomalies.
-
-Also add JS columns for: status fields (color tags), money fields (formatted with ¥), date fields (countdown/overdue highlighting), progress fields (Progress bar).
-
-Add event flows for: auto-fill current user on new records, auto-calculate totals (contract_items subtotal, quote final_amount).
+| Page | Type | JS Blocks Required |
+|------|------|--------------------|
+| 客户 | Core Business | Summary cards (总数/已签约/跟进中/流失) + Industry distribution chart |
+| 联系人 | Reference | filter + table only |
+| 公海池 | Reference | filter + table only |
+| 线索 | Pipeline | Stage cards (新线索→跟进中→已转化→无效) with counts |
+| 商机 | Core Business + Pipeline | Summary cards (总金额/各阶段) + Stage pipeline + table |
+| 报价 | Financial | Status summary (草稿/已发送/已确认 amounts) + table |
+| 合同 | Alert/Monitor | Expiring contracts alert list + status stats + table |
+| 回款 | Financial | Period summary (本月/上月 amounts) + status breakdown + table |
+| 审批 | Pipeline | Status cards (待审批/已通过/已拒绝) + table |
+| 服务工单 | Core Business | Summary cards (待处理/处理中/已解决) + Priority alert list + table |
+| 知识库 | Reference | filter + table only |
+| 跟进记录 | Activity | Today/week stats + type distribution + table |
+| 产品 | Reference | filter + table only |
+| 竞争对手 | Reference | filter + table only |
+| 销售目标 | Target/Progress | Progress bars (target vs actual) + table |
 
 ## Phases
 
-1. SQL DDL + DML (sample data, 5-10 rows per table)
+1. SQL DDL + DML (sample data, 5-10 rows per table). Use nb_execute_sql_file for all DDL+DML in one call.
 2. nb_setup_collection for all 16 tables (with field upgrades + relations)
-3. nb_create_menu + nb_crud_page for all pages (record create_form/edit_form UIDs in notes.md!)
-4. Workflows (lead→opportunity conversion, contract expiry alerts, payment confirmation, ticket escalation, approval flow, target achievement check)
-5. AI Employees (sales assistant, support bot, contract advisor)
-6. JS Enhancement (columns + business blocks + event flows)
+3. Build pages with nb_compose_page_file:
+   a. Call nb_fields() for ALL collections FIRST. Save field names + enum values to notes.md.
+   b. Read crm-requirements.md — understand what each page is FOR.
+   c. Build Reference pages first (联系人, 公海池, 知识库, 产品, 竞争对手) — batch 1.
+   d. Build Core/Pipeline/Financial pages (客户, 商机, 线索, 报价, 回款, 服务工单) — batch 2-3. Each MUST have type:"js" blocks with working code using ctx.api.request(). See CLAUDE.md examples.
+   e. Build Alert/Activity/Target pages (合同, 审批, 跟进记录, 销售目标) — batch 4.
+   f. Record form UIDs in notes.md!
+4. JS columns (status tags, money format, date countdown) + event flows (auto-fill, auto-calculate)
+5. Workflows (lead→opportunity conversion, contract expiry alerts, payment confirmation, ticket escalation, approval flow, target achievement check)
+6. AI Employees (sales assistant, support bot, contract advisor)

@@ -1100,29 +1100,6 @@ def register_tools(mcp: FastMCP):
     """Register page maintenance tools on the MCP server."""
 
     @mcp.tool()
-    def nb_show_page(page_title: str) -> str:
-        """Show the FlowModel structure tree of a page.
-
-        Displays all blocks, fields, and actions in a hierarchical tree format,
-        including UIDs for use with other tools.
-
-        Args:
-            page_title: Page title as shown in the sidebar menu
-
-        Returns:
-            Tree structure text or error message.
-
-        Example:
-            nb_show_page("Asset Ledger")
-        """
-        nb = get_nb_client()
-        pt = PageTool(nb)
-        tree, text = pt.show(page_title)
-        if tree is None:
-            return text
-        return text
-
-    @mcp.tool()
     def nb_inspect_page(page_title: str, depth: int = 1) -> str:
         """Inspect a page and return a visual layout summary.
 
@@ -1518,22 +1495,3 @@ def register_tools(mcp: FastMCP):
         for p in pages:
             lines.append(f"{p['path']:<40} {p['tab_uid'] or 'N/A':<15} {p['route_id']}")
         return "\n".join(lines)
-
-    @mcp.tool()
-    def nb_fields(collection_name: str) -> str:
-        """Show all available fields for a collection.
-
-        Use this BEFORE creating forms, tables, or event flows to verify
-        which field names exist and what types they are.
-
-        Args:
-            collection_name: Collection name (e.g., "nb_am_assets")
-
-        Returns:
-            Formatted field list with names, types, and titles.
-
-        Example:
-            nb_fields("nb_am_purchase_requests")
-        """
-        nb = get_nb_client()
-        return nb.fields(collection_name)

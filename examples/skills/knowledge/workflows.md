@@ -1,0 +1,1 @@
+../../../skills/nocobase-workflow/skill.md

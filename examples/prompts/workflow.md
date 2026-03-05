@@ -104,7 +104,7 @@ The agent:
 1. Creates tables (nb_execute_sql) + registers collections (nb_setup_collection)
 2. Inserts test data
 3. Builds pages (nb_crud_page) — KPIs, filter, table, forms, detail popups
-4. Creates outlines (nb_outline) for each JS enhancement noted in design-notes.md
+4. Creates JS placeholders via XML markup for each JS enhancement noted in design-notes.md
 5. Creates workflows (auto-numbering, status sync)
 6. Creates AI employees
 
@@ -142,7 +142,7 @@ Also read js-sandbox-reference.md for code patterns." --model sonnet --max-turns
 
 The agent:
 1. Reads notes.md for outline UIDs and their ctx_info descriptions
-2. Implements each outline using `nb_js_column` / `nb_js_block` / `nb_event_flow`
+2. Implements each placeholder using `nb_inject_js(uid, code)` per placeholder
 3. Uses HTML prototypes as visual reference for color schemes and rendering
 
 See `js-enhance-prompt.md` for the full prompt template.

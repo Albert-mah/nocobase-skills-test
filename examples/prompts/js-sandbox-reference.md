@@ -13,46 +13,54 @@ NocoBase runs custom JavaScript in a sandboxed environment. All JS code for bloc
 | `ctx.record` | Object | Current row data (in table columns and detail popups) |
 | `ctx.themeToken` | Object | Ant Design theme tokens (colorPrimary, colorSuccess, etc.) |
 
-## JS Column (nb_js_column)
+## JS Column (nb_inject_js)
 
 Renders custom content for each table row. Code runs per-row.
 
-### Pattern: Status Tag
+**IMPORTANT**: Do NOT use JS columns for select/enum fields — NocoBase renders those as colored tags natively via field interface config. JS columns are for non-standard rendering only.
+
+### Pattern: Composite Cell (two fields in one column)
 
 ```javascript
-const s = (ctx.record || {}).status;
-const colors = {
-  '使用中': 'green', '闲置': 'blue',
-  '维修中': 'orange', '已报废': 'red'
-};
-ctx.render(
-  ctx.React.createElement(ctx.antd.Tag,
-    { color: colors[s] || 'default' },
-    s || '-'
-  )
-);
+const r = ctx.record || {};
+const h = ctx.React.createElement;
+ctx.render(h('div', null,
+  h('div', { style: { fontWeight: 500, fontSize: 13, lineHeight: '20px' } },
+    r.name || '-'),
+  h('div', { style: { color: '#8c8c8c', fontSize: 12, marginTop: 1 } },
+    [r.industry, r.grade].filter(Boolean).join(' · ') || '-')
+));
 ```
 
-### Pattern: Priority Badge (P1 with pulse dot)
+### Pattern: Inline Comparison (target vs actual with mini bar)
 
 ```javascript
-const p = (ctx.record || {}).priority;
-const map = { P1: 'red', P2: 'orange', P3: 'blue', P4: 'default' };
+const r = ctx.record || {};
+const target = Number(r.target_amount) || 0;
+const actual = Number(r.achieved_amount) || 0;
+const pct = target > 0 ? Math.round(actual / target * 100) : 0;
+const color = pct >= 100 ? '#52c41a' : pct >= 80 ? '#1890ff' : pct >= 60 ? '#faad14' : '#cf1322';
 const h = ctx.React.createElement;
-const els = [];
-if (p === 'P1') {
-  els.push(h('span', {
-    key: 'dot',
-    style: {
-      display: 'inline-block', width: 8, height: 8,
-      borderRadius: '50%', background: '#ff4d4f', marginRight: 6,
-      animation: 'pulse 1.5s infinite',
-      boxShadow: '0 0 0 0 rgba(255,77,79,0.6)'
-    }
-  }));
-}
-els.push(h(ctx.antd.Tag, { key: 'tag', color: map[p] || 'default' }, p || '-'));
-ctx.render(h('span', null, ...els));
+const fmt = v => v >= 10000 ? '¥' + (v/10000).toFixed(1) + '万' : '¥' + v.toLocaleString('zh-CN');
+ctx.render(h('div', null,
+  h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: 12 } },
+    h('span', { style: { color, fontWeight: 500 } }, fmt(actual)),
+    h('span', { style: { color: '#8c8c8c' } }, '/ ' + fmt(target))),
+  h('div', { style: { height: 4, background: '#f0f0f0', borderRadius: 2, marginTop: 3, overflow: 'hidden' } },
+    h('div', { style: { width: Math.min(pct, 100) + '%', height: '100%', background: color, borderRadius: 2 } }))
+));
+```
+
+### Pattern: Star Rating (1-5 stars)
+
+```javascript
+const v = Number((ctx.record || {}).satisfaction) || 0;
+if (!v) { ctx.render(ctx.React.createElement('span', { style: { color: '#bbb', fontSize: 12 } }, '未评价')); return; }
+const color = v >= 4 ? '#faad14' : v >= 3 ? '#faad14' : '#d9d9d9';
+ctx.render(ctx.React.createElement('span',
+  { style: { color, letterSpacing: 2, fontSize: 14 } },
+  '★'.repeat(v) + '☆'.repeat(Math.max(0, 5 - v))
+));
 ```
 
 ### Pattern: Money Formatting (¥)
@@ -137,7 +145,7 @@ ctx.render(
 );
 ```
 
-## JS Block (nb_js_block)
+## JS Block (nb_inject_js)
 
 Renders a custom block on the page (charts, dashboards, KPI groups).
 
@@ -190,7 +198,7 @@ Renders a custom block on the page (charts, dashboards, KPI groups).
 })();
 ```
 
-## Event Flow (nb_event_flow)
+## Event Flow (nb_inject_js with event_name)
 
 Attaches JS logic to form events.
 

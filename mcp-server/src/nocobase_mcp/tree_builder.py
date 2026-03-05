@@ -82,23 +82,18 @@ class TreeNode:
             d["subType"] = sub_type
         d.update(self._extra)
 
-        # Recursively serialize children
+        # Recursively serialize children — direct array/object format
+        # (matches NocoBase client serialize(): Array.isArray(subItems) check)
         if self._sub_models:
             sub = {}
             for key, val in self._sub_models.items():
                 if isinstance(val, list):
-                    sub[key] = {
-                        "subType": "array",
-                        "data": [
-                            child.to_dict(parent_id=self.uid, sub_key=key, sub_type="array")
-                            for child in val
-                        ],
-                    }
+                    sub[key] = [
+                        child.to_dict(parent_id=self.uid, sub_key=key, sub_type="array")
+                        for child in val
+                    ]
                 else:
-                    sub[key] = {
-                        "subType": "object",
-                        "data": val.to_dict(parent_id=self.uid, sub_key=key, sub_type="object"),
-                    }
+                    sub[key] = val.to_dict(parent_id=self.uid, sub_key=key, sub_type="object")
             d["subModels"] = sub
 
         return d
@@ -726,6 +721,104 @@ class TreeBuilder:
         code = self.nb._outline_code(title, ctx_info)
         return self.js_block_node(title, code, sort)
 
+    # ── Placeholder system ────────────────────────────────────
+
+    @staticmethod
+    def _placeholder_code(title: str, desc: str, kind: str, meta: dict | None = None) -> str:
+        """Generate placeholder JS that renders a visual card with description.
+
+        Embeds __placeholder__ marker + kind + desc for later discovery by find_placeholders().
+        """
+        info = {"__placeholder__": True, "kind": kind, "title": title, "desc": desc}
+        if meta:
+            info.update(meta)
+        info_json = json.dumps(info, ensure_ascii=False, indent=2)
+        icon_map = {"column": "\U0001f4ca", "block": "\U0001f4e6",
+                    "item": "\U0001f4dd", "event": "\u26a1"}
+        icon = icon_map.get(kind, "\U0001f527")
+        return (
+            "const h = ctx.React.createElement;\n"
+            f"const info = {info_json};\n"
+            "const tk = ctx.themeToken || {};\n"
+            "ctx.render(h('div', {style: {"
+            "padding: 8, borderRadius: 6, fontSize: 12, lineHeight: '18px', "
+            "background: tk.colorInfoBg || '#e6f7ff', "
+            "border: '1px dashed ' + (tk.colorInfoBorder || '#91caff')"
+            "}},\n"
+            "  h('div', {style: {fontWeight: 600, fontSize: 13, marginBottom: 2, "
+            "color: tk.colorPrimary || '#1677ff'}}, "
+            f"'{icon} ' + info.title),\n"
+            "  h('div', {style: {color: tk.colorTextSecondary || '#666', "
+            "whiteSpace: 'pre-wrap'}}, info.desc)\n"
+            "));"
+        )
+
+    def placeholder_js_col(self, title: str, field: str, desc: str,
+                           col_type: str | None = None,
+                           meta: dict | None = None,
+                           sort: int = 50, width: int = 120) -> TreeNode:
+        """JSColumnModel placeholder — description only, no real JS."""
+        m = {"field": field}
+        if col_type:
+            m["col_type"] = col_type
+        if meta:
+            m.update(meta)
+        code = self._placeholder_code(title, desc, "column", m)
+        sp: dict[str, Any] = {
+            "jsSettings": {"runJs": {"version": "v1", "code": code}},
+            "tableColumnSettings": {"title": {"title": title}},
+        }
+        if width:
+            sp["tableColumnSettings"]["width"] = {"width": width}
+        return TreeNode("JSColumnModel", sp, sort)
+
+    def placeholder_js_block(self, title: str, desc: str,
+                             meta: dict | None = None, sort: int = 0) -> TreeNode:
+        """JSBlockModel placeholder — description only, no real JS."""
+        code = self._placeholder_code(title, desc, "block", meta)
+        sp = {
+            **STEP_PARAMS_TEMPLATES["js_code"](code),
+            **STEP_PARAMS_TEMPLATES["card_title"](title),
+        }
+        return TreeNode("JSBlockModel", sp, sort)
+
+    def placeholder_js_item(self, title: str, desc: str,
+                            meta: dict | None = None, sort: int = 0) -> TreeNode:
+        """JSItemModel placeholder — description only, no real JS."""
+        code = self._placeholder_code(title, desc, "item", meta)
+        sp = {
+            "jsSettings": {"runJs": {"version": "v1", "code": code}},
+            "editItemSettings": {"showLabel": {"showLabel": True, "title": title}},
+        }
+        return TreeNode("JSItemModel", sp, sort)
+
+    def placeholder_event(self, event_name: str, desc: str,
+                          meta: dict | None = None) -> dict:
+        """Build a flowRegistry entry for an event placeholder.
+
+        Returns a dict {flow_key: flow_def} to merge into a node's flow_registry.
+        The caller should do: node.flow_registry.update(result)
+        """
+        flow_key = uid()
+        step_key = uid()
+        info = {"__placeholder__": True, "kind": "event",
+                "event": event_name, "desc": desc}
+        if meta:
+            info.update(meta)
+        code = (
+            f"// PLACEHOLDER: {desc}\n"
+            f"// {json.dumps(info, ensure_ascii=False)}\n"
+            "console.log('placeholder event — not yet implemented');"
+        )
+        return {flow_key: {
+            "key": flow_key, "title": f"[placeholder] {event_name}",
+            "on": {"eventName": event_name,
+                   "defaultParams": {"condition": {"items": [], "logic": "$and"}}},
+            "steps": {step_key: {
+                "key": step_key, "use": "runjs", "sort": 1,
+                "flowKey": flow_key, "defaultParams": {"code": code}}},
+        }}
+
     # ── AddNew / Edit / Detail popup ───────────────────────────
 
     def addnew_form(self, coll: str, fields_dsl: str | list,
@@ -886,6 +979,7 @@ class TreeBuilder:
 
         sp: dict[str, Any] = STEP_PARAMS_TEMPLATES["resource_init"](target_coll)
         sp["resourceSettings"]["init"].update({
+            "association": f"{parent_coll}.{assoc}",
             "associationName": f"{parent_coll}.{assoc}",
             "sourceId": "{{ctx.view.inputArgs.filterByTk}}"})
         if title:

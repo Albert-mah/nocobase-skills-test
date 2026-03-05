@@ -693,10 +693,32 @@ def register_tools(mcp: FastMCP):
         except APIError as e:
             results.append(f"[workflows] ERROR: {e}")
 
-        # Step 4: Clean routes/menus whose title matches known system names
-        # Agents should still verify menu structure after cleanup
-        coll_names = [c["name"] for c in collections] if "collections" in dir() else []
-        if coll_names:
-            results.append(f"[routes] Agents should verify menu — old routes may remain for deleted collections")
+        # Step 4: Clean routes matching system name derived from prefix
+        # e.g. nb_crm_ → "CRM", nb_am_ → "AM"
+        parts = prefix.strip("_").split("_")
+        system_name = parts[1].upper() if len(parts) >= 2 else None
+
+        if system_name:
+            try:
+                resp = client.get("/api/desktopRoutes:list?paginate=false")
+                routes = resp.get("data", [])
+                to_delete = []
+                for rt in routes:
+                    title = (rt.get("title") or "").strip()
+                    # Match exact system name (case-insensitive)
+                    if title.upper() == system_name:
+                        to_delete.append(rt["id"])
+                deleted_routes = 0
+                for rid in to_delete:
+                    try:
+                        client.post(f"/api/desktopRoutes:destroy?filterByTk={rid}")
+                        deleted_routes += 1
+                    except APIError:
+                        pass
+                results.append(f"[routes] {deleted_routes} top-level groups deleted (matched '{system_name}')")
+            except APIError as e:
+                results.append(f"[routes] ERROR: {e}")
+        else:
+            results.append(f"[routes] skipped (cannot derive system name from '{prefix}')")
 
         return f"Clean '{prefix}': " + " | ".join(results)

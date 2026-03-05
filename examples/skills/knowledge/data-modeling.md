@@ -1,0 +1,1 @@
+../../../skills/nocobase-data-modeling/skill.md

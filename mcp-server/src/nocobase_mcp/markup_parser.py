@@ -1,0 +1,529 @@
+"""XML markup parser for NocoBase page building.
+
+Parses HTML-like XML markup into TreeNode trees for NocoBase FlowModel pages.
+JS nodes are created as description-only placeholders — no actual JS code.
+
+Usage:
+    parser = PageMarkupParser(nb)
+    root, meta = parser.parse(tab_uid, '<page collection="users">...</page>')
+    nb.save_nested(root, tab_uid, filter_manager=meta.pop("_filter_manager", None))
+
+Supported tags:
+    <page>          Root element, sets default collection
+    <row>           Horizontal layout row (children split by span)
+    <stack>         Vertical stack within a column
+    <kpi>           KPI statistic card
+    <filter>        Filter form block
+    <table>         Table block with columns
+    <js-col>        JS column placeholder (text = description)
+    <js-block>      JS block placeholder (text = description)
+    <js-item>       JS item placeholder (text = description)
+    <addnew>        AddNew form popup
+    <edit>          Edit form popup
+    <detail>        Detail popup with tabs
+    <tab>           Tab within detail popup
+    <subtable>      Association sub-table
+    <event>         Event flow placeholder
+    <form>          Standalone form block
+    <detail-block>  Standalone detail block
+"""
+
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from typing import Any, TYPE_CHECKING
+
+from .tree_builder import TreeNode, TreeBuilder
+from .utils import uid
+
+if TYPE_CHECKING:
+    from .client import NB
+
+
+def _sanitize_markup(markup: str) -> str:
+    """Escape XML-special characters in text content of JS/event tags.
+
+    AI agents often write descriptions like "超过10万<红色" or "A & B" inside
+    <js-col>, <js-block>, <js-item>, <event> tags. These break XML parsing.
+    This pre-processor escapes & and < in the text content of those tags.
+    """
+    def _escape_text(m: re.Match) -> str:
+        opening = m.group(1)
+        text = m.group(2)
+        closing = m.group(3)
+        # Escape & first (before introducing new &), then <
+        text = text.replace("&", "&amp;").replace("<", "&lt;")
+        return opening + text + closing
+
+    tags = r"js-col|js-block|js-item|event"
+    pattern = rf"(<(?:{tags})\b[^>]*>)(.*?)(</(?:{tags})>)"
+    return re.sub(pattern, _escape_text, markup, flags=re.DOTALL)
+
+
+class PageMarkupParser:
+    """Parse XML markup into TreeNode tree + metadata."""
+
+    def __init__(self, nb: NB):
+        self.nb = nb
+        self.tb = TreeBuilder(nb)
+
+    def parse(self, tab_uid: str, markup: str) -> tuple[TreeNode, dict]:
+        """Parse XML markup into (TreeNode root, meta dict).
+
+        Args:
+            tab_uid: Tab UID for context (used in meta, not in tree)
+            markup: XML string with <page> root element
+
+        Returns:
+            (root TreeNode, meta dict with grid_uid, node_count, _filter_manager, etc.)
+        """
+        markup = _sanitize_markup(markup)
+        page_el = ET.fromstring(markup)
+        if page_el.tag != "page":
+            raise ValueError(f"Root element must be <page>, got <{page_el.tag}>")
+
+        coll = page_el.get("collection", "")
+        if coll:
+            self.tb._load_meta(coll)
+
+        root = TreeNode("BlockGridModel", {}, 0)
+        meta: dict[str, Any] = {"grid_uid": root.uid}
+        block_map: dict[str, TreeNode] = {}  # id → TreeNode
+        filter_bindings: list[tuple[str, str]] = []  # (filter_id, target_id)
+
+        # Parse children into rows
+        all_rows: list[list[tuple[TreeNode | list[TreeNode], int]]] = []
+
+        sort_idx = 0
+        for child in page_el:
+            if child.tag == "row":
+                row_items = self._parse_row_children(
+                    child, coll, root, block_map, filter_bindings, meta, sort_idx)
+                all_rows.append(row_items)
+                sort_idx += len(row_items)
+            else:
+                # Non-row top-level element → auto full-width row
+                node, s_idx = self._parse_element(
+                    child, coll, root, block_map, filter_bindings, meta, sort_idx)
+                if node:
+                    all_rows.append([(node, 24)])
+                    sort_idx = s_idx
+
+        # Build gridSettings
+        rows_dict, sizes_dict = {}, {}
+        for row_items in all_rows:
+            if not row_items:
+                continue
+            row_id = uid()
+            row_cols, row_sizes = [], []
+            for item, span in row_items:
+                if isinstance(item, list):
+                    # Stacked column
+                    row_cols.append([n.uid for n in item])
+                else:
+                    row_cols.append([item.uid])
+                row_sizes.append(span)
+            rows_dict[row_id] = row_cols
+            sizes_dict[row_id] = row_sizes
+
+        root.step_params = {"gridSettings": {"grid": {
+            "rows": rows_dict, "sizes": sizes_dict}}}
+
+        # Build filterManager
+        filter_managers = []
+        for filt_id, tgt_id in filter_bindings:
+            fnode = block_map.get(filt_id)
+            tnode = block_map.get(tgt_id)
+            if fnode and tnode and hasattr(fnode, "_filter_item_uid"):
+                filter_managers.append({
+                    "filterId": fnode._filter_item_uid,
+                    "targetId": tnode.uid,
+                    "filterPaths": fnode._filter_paths,
+                })
+        if filter_managers:
+            meta["_filter_manager"] = filter_managers
+
+        meta["node_count"] = root.count_nodes()
+        return root, meta
+
+    def _parse_row_children(
+        self, row_el: ET.Element, coll: str, root: TreeNode,
+        block_map: dict, filter_bindings: list, meta: dict, sort_idx: int
+    ) -> list[tuple[TreeNode | list[TreeNode], int]]:
+        """Parse children of a <row> element. Returns [(node_or_stack, span), ...]."""
+        children = list(row_el)
+        n = len(children)
+        default_span = 24 // n if n > 0 else 24
+        items = []
+
+        for child in children:
+            span = int(child.get("span", default_span))
+
+            if child.tag == "stack":
+                stack_nodes = []
+                for sc in child:
+                    node, sort_idx = self._parse_element(
+                        sc, coll, root, block_map, filter_bindings, meta, sort_idx)
+                    if node:
+                        stack_nodes.append(node)
+                if stack_nodes:
+                    items.append((stack_nodes, span))
+            else:
+                node, sort_idx = self._parse_element(
+                    child, coll, root, block_map, filter_bindings, meta, sort_idx)
+                if node:
+                    items.append((node, span))
+
+        return items
+
+    def _parse_element(
+        self, el: ET.Element, default_coll: str, root: TreeNode,
+        block_map: dict, filter_bindings: list, meta: dict, sort_idx: int
+    ) -> tuple[TreeNode | None, int]:
+        """Parse a single XML element into a TreeNode. Returns (node, next_sort_idx)."""
+        tag = el.tag
+        coll = el.get("collection", default_coll)
+        el_id = el.get("id", "")
+
+        node: TreeNode | None = None
+
+        if tag == "kpi":
+            title = el.get("title", "Count")
+            # Auto-detect misuse: chart/visualization titles should be <js-block>
+            _viz_keywords = ("分布", "漏斗", "统计", "预警", "队列", "动态",
+                             "进度", "排行", "趋势", "对比", "分析", "chart",
+                             "pipeline", "funnel", "alert", "distribution")
+            if any(kw in title.lower() for kw in _viz_keywords):
+                # Auto-convert to js-block placeholder
+                desc = (el.text or "").strip() or f"{title} (auto-converted from <kpi>)"
+                m = {"collection": coll} if coll else {}
+                node = self.tb.placeholder_js_block(title, desc, meta=m, sort=sort_idx)
+                self.nb.warnings.append(
+                    f'<kpi title="{title}"> auto-converted to <js-block>: '
+                    f'title contains visualization keyword. Use <kpi> only for simple counts.'
+                )
+            else:
+                filter_str = el.get("filter")
+                filter_ = self._parse_kpi_filter(filter_str) if filter_str else None
+                color = el.get("color")
+                node = self.tb.kpi_block(title, coll, filter_=filter_,
+                                         color=color, sort=sort_idx)
+
+        elif tag == "filter":
+            fields = self._split_fields(el.get("fields", "name"))
+            target = el.get("target", "")
+            node = self.tb.filter_form(coll, fields, sort=sort_idx)
+            if target:
+                filter_bindings.append((el_id or f"_filter_{sort_idx}", target))
+
+        elif tag == "table":
+            fields = self._split_fields(el.get("fields", ""))
+            title = el.get("title")
+            first_click = el.get("first_click", "true").lower() != "false"
+            node = self.tb.table_block(coll, fields, first_click=first_click,
+                                       title=title, sort=sort_idx)
+
+            # Process table children: js-col, addnew, edit, detail
+            js_col_sort = len(fields) + 1
+            has_addnew = False
+            has_edit = False
+            has_detail = False
+            for child in el:
+                if child.tag == "js-col":
+                    jc_node = self._parse_js_col(child, js_col_sort)
+                    node.add_child("columns", "array", jc_node)
+                    js_col_sort += 1
+
+                elif child.tag == "addnew":
+                    has_addnew = True
+                    addnew_fields_dsl = child.get("fields", "")
+                    if addnew_fields_dsl and hasattr(node, "_addnew"):
+                        addnew_cp = self.tb.addnew_form(coll, addnew_fields_dsl)
+                        node._addnew.add_child("page", "object", addnew_cp)
+                        meta[f"{el_id or 'table'}_create_form"] = addnew_cp._create_form_uid
+                        # Events on addnew form
+                        self._parse_events(child, addnew_cp)
+
+                elif child.tag == "edit":
+                    has_edit = True
+                    edit_fields_dsl = child.get("fields", "")
+                    if edit_fields_dsl and hasattr(node, "_actcol"):
+                        edit_node = self.tb.edit_action(coll, edit_fields_dsl)
+                        node._actcol.add_child("actions", "array", edit_node)
+                        meta[f"{el_id or 'table'}_edit_form"] = edit_node._edit_form_uid
+                        # Events on edit form
+                        self._parse_events(child, edit_node)
+
+                elif child.tag == "detail":
+                    has_detail = True
+                    click_field = getattr(node, "_click_field", None)
+                    if click_field:
+                        tabs = self._parse_detail(child, coll)
+                        click_field.step_params["popupSettings"]["openView"].update({
+                            "collectionName": coll, "dataSourceKey": "main",
+                            "mode": "drawer", "size": "large",
+                            "pageModelClass": "ChildPageModel",
+                            "uid": click_field.uid,
+                        })
+                        popup_cp = self.tb.detail_popup(coll, tabs)
+                        click_field.add_child("page", "object", popup_cp)
+
+            # Auto-generate missing forms with all editable fields
+            if coll and (not has_addnew or not has_edit or not has_detail):
+                editable = self._get_editable_fields(coll)
+                if editable:
+                    auto_dsl = self._auto_form_dsl(editable)
+
+                    if not has_addnew and hasattr(node, "_addnew"):
+                        addnew_cp = self.tb.addnew_form(coll, auto_dsl)
+                        node._addnew.add_child("page", "object", addnew_cp)
+                        meta[f"{el_id or 'table'}_create_form"] = addnew_cp._create_form_uid
+
+                    if not has_edit and hasattr(node, "_actcol"):
+                        edit_node = self.tb.edit_action(coll, auto_dsl)
+                        node._actcol.add_child("actions", "array", edit_node)
+                        meta[f"{el_id or 'table'}_edit_form"] = edit_node._edit_form_uid
+
+                    if not has_detail and getattr(node, "_click_field", None):
+                        click_field = node._click_field
+                        all_display = self._get_all_display_fields(coll)
+                        detail_dsl = self._auto_form_dsl(all_display) if all_display else auto_dsl
+                        click_field.step_params["popupSettings"]["openView"].update({
+                            "collectionName": coll, "dataSourceKey": "main",
+                            "mode": "drawer", "size": "large",
+                            "pageModelClass": "ChildPageModel",
+                            "uid": click_field.uid,
+                        })
+                        popup_cp = self.tb.detail_popup(coll, [{"title": "详情", "fields": detail_dsl}])
+                        click_field.add_child("page", "object", popup_cp)
+
+        elif tag == "js-block":
+            title = el.get("title", "JS Block")
+            desc = (el.text or "").strip()
+            m = {}
+            if coll:
+                m["collection"] = coll
+            node = self.tb.placeholder_js_block(title, desc, meta=m, sort=sort_idx)
+
+        elif tag == "js-item":
+            title = el.get("title", "JS Item")
+            desc = (el.text or "").strip()
+            node = self.tb.placeholder_js_item(title, desc, sort=sort_idx)
+
+        elif tag == "form":
+            mode = el.get("mode", "create")
+            fields_dsl = el.get("fields", "")
+            title = el.get("title")
+            req_str = el.get("required", "")
+            required = set(req_str.split(",")) if req_str else None
+            node = self.tb.form_block(coll, fields_dsl, mode=mode, title=title,
+                                      required=required, sort=sort_idx)
+            self._parse_events(el, node)
+
+        elif tag == "detail-block":
+            fields_dsl = el.get("fields", "")
+            title = el.get("title")
+            node = self.tb.detail_block(coll, fields_dsl, title=title, sort=sort_idx)
+
+        elif tag == "subtable":
+            assoc = el.get("assoc", "")
+            sub_coll = el.get("collection", "")
+            fields = self._split_fields(el.get("fields", ""))
+            title = el.get("title")
+            node = self.tb._sub_table_node(default_coll, assoc, sub_coll,
+                                           fields, title, sort_idx)
+
+        else:
+            # Unknown tag — skip
+            return None, sort_idx
+
+        if node:
+            root.add_child("items", "array", node)
+            if el_id:
+                block_map[el_id] = node
+            elif tag == "filter":
+                block_map[f"_filter_{sort_idx}"] = node
+            meta[f"{el_id or tag}_{sort_idx}_uid"] = node.uid
+            sort_idx += 1
+
+        return node, sort_idx
+
+    def _parse_js_col(self, el: ET.Element, sort: int) -> TreeNode:
+        """Parse <js-col> → placeholder_js_col TreeNode."""
+        title = el.get("title", "JS Column")
+        field = el.get("field", "")
+        col_type = el.get("type")
+        width = int(el.get("width", "120"))
+        desc = (el.text or "").strip()
+        subs = el.get("subs")
+        threshold = el.get("threshold")
+        m: dict[str, Any] = {}
+        if subs:
+            m["subs"] = subs
+        if threshold:
+            m["threshold"] = threshold
+        return self.tb.placeholder_js_col(title, field, desc, col_type=col_type,
+                                          meta=m, sort=sort, width=width)
+
+    def _parse_detail(self, detail_el: ET.Element, coll: str) -> list[dict]:
+        """Parse <detail> → list of tab defs for detail_popup()."""
+        tabs = []
+        for tab_el in detail_el:
+            if tab_el.tag != "tab":
+                continue
+            tab_title = tab_el.get("title", "Tab")
+            fields_dsl = tab_el.get("fields", "")
+            tab_def: dict[str, Any] = {"title": tab_title}
+
+            # Check for sub-elements (subtable, js-item, etc.)
+            blocks = []
+            has_fields = bool(fields_dsl)
+
+            if has_fields:
+                blocks.append({"type": "details", "fields": fields_dsl})
+
+            for child in tab_el:
+                if child.tag == "subtable":
+                    sub_coll = child.get("collection", "")
+                    sub_fields = self._split_fields(child.get("fields", ""))
+                    assoc = child.get("assoc", "")
+                    blocks.append({
+                        "type": "sub_table",
+                        "assoc": assoc,
+                        "coll": sub_coll,
+                        "fields": sub_fields,
+                        "title": child.get("title"),
+                    })
+                elif child.tag == "js-item":
+                    title = child.get("title", "JS Item")
+                    desc = (child.text or "").strip()
+                    code = self.tb._placeholder_code(title, desc, "item")
+                    blocks.append({
+                        "type": "js",
+                        "title": title,
+                        "code": code,
+                    })
+                elif child.tag == "js-block":
+                    title = child.get("title", "JS Block")
+                    desc = (child.text or "").strip()
+                    code = self.tb._placeholder_code(title, desc, "block")
+                    blocks.append({
+                        "type": "js",
+                        "title": title,
+                        "code": code,
+                    })
+
+            if blocks:
+                if len(blocks) == 1 and blocks[0]["type"] == "details":
+                    tab_def["fields"] = fields_dsl
+                else:
+                    tab_def["blocks"] = blocks
+                    if not has_fields:
+                        # Need at least something for the tab
+                        tab_def["fields"] = ""
+            else:
+                tab_def["fields"] = fields_dsl
+
+            tabs.append(tab_def)
+
+        if not tabs:
+            # Fallback: single tab from detail element's own fields
+            fields_dsl = detail_el.get("fields", "")
+            tabs = [{"title": "Details", "fields": fields_dsl}]
+
+        return tabs
+
+    def _parse_events(self, el: ET.Element, parent_node: TreeNode) -> None:
+        """Parse <event> children and attach as placeholder flowRegistry entries."""
+        for child in el:
+            if child.tag != "event":
+                continue
+            event_name = child.get("on", "formValuesChange")
+            desc = (child.text or "").strip()
+            registry_entry = self.tb.placeholder_event(event_name, desc)
+
+            # Find the form model node to attach events to
+            # For addnew: parent_node is ChildPageModel → find CreateFormModel
+            # For edit: parent_node is EditActionModel → find EditFormModel
+            target = self._find_form_model(parent_node)
+            if target:
+                target.flow_registry.update(registry_entry)
+
+    def _find_form_model(self, node: TreeNode) -> TreeNode | None:
+        """Recursively find CreateFormModel or EditFormModel in tree."""
+        if node.use in ("CreateFormModel", "EditFormModel"):
+            return node
+        for val in node._sub_models.values():
+            if isinstance(val, list):
+                for child in val:
+                    found = self._find_form_model(child)
+                    if found:
+                        return found
+            else:
+                found = self._find_form_model(val)
+                if found:
+                    return found
+        return None
+
+    @staticmethod
+    def _split_fields(s: str) -> list[str]:
+        """Split comma-separated field string into list."""
+        if not s:
+            return []
+        return [f.strip() for f in s.split(",") if f.strip()]
+
+    def _get_editable_fields(self, coll: str) -> list[str]:
+        """Get editable fields — exclude system fields, o2m, m2m, oho, obo."""
+        SKIP = {"id", "createdAt", "updatedAt", "createdById", "updatedById",
+                "createdBy", "updatedBy", "sort"}
+        SKIP_IFACE = {"o2m", "m2m", "oho", "obo", "createdBy", "updatedBy",
+                       "createdAt", "updatedAt"}
+        self.nb._load_meta(coll)
+        schema = self.nb._field_cache.get(coll, {})
+        return [n for n, info in schema.items()
+                if n not in SKIP
+                and not n.startswith("f_")
+                and not n.endswith("Id")
+                and info.get("interface") not in SKIP_IFACE]
+
+    def _get_all_display_fields(self, coll: str) -> list[str]:
+        """Get all displayable fields — exclude only internal/system fields."""
+        SKIP = {"id", "createdById", "updatedById", "sort"}
+        SKIP_IFACE = {"createdBy", "updatedBy"}
+        self.nb._load_meta(coll)
+        schema = self.nb._field_cache.get(coll, {})
+        return [n for n, info in schema.items()
+                if n not in SKIP
+                and not n.startswith("f_")
+                and not n.endswith("Id")
+                and info.get("interface") not in SKIP_IFACE]
+
+    @staticmethod
+    def _auto_form_dsl(fields: list[str]) -> str:
+        """Auto-generate fields DSL — pair fields side by side."""
+        lines = []
+        for i in range(0, len(fields), 2):
+            if i + 1 < len(fields):
+                lines.append(f"{fields[i]} | {fields[i+1]}")
+            else:
+                lines.append(fields[i])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_kpi_filter(filter_str: str) -> dict | None:
+        """Parse 'field=value' filter notation for KPI.
+
+        Supports:
+            status=跟进中          → {"status": "跟进中"}
+            createdAt=thisMonth    → {"createdAt": "thisMonth"} (handled by kpi_block)
+        """
+        if not filter_str:
+            return None
+        result = {}
+        for part in filter_str.split(","):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                result[k.strip()] = v.strip()
+        return result or None

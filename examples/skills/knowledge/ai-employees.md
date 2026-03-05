@@ -1,0 +1,1 @@
+../../../skills/nocobase-ai-employee/skill.md

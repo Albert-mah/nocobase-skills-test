@@ -1,17 +1,55 @@
 # NocoBase Build Checklist
 
 Execute each step in order. After completing each step, write the result to `notes.md`.
-Steps marked `[parallel-ok]` can be dispatched to sub-agents. Otherwise just do them sequentially.
+
+---
+
+## How to Use This Checklist
+
+### Task Management — Create Task Tables
+
+After every **planning step**, create a task table in `notes.md`. Each row = one executable unit with a status marker.
+
+```
+### Page Tasks
+| # | Page | Tab UID | Pattern | Detail Spec | Status |
+|---|------|---------|---------|-------------|--------|
+| 1 | 客户 | lhc... | A+B | 4tabs, js-item(画像), 3 subtable | [todo] |
+| 2 | 联系人 | ds3... | E | auto | [done] |
+```
+
+Markers: `[todo]` → `[done]` or `[fail]` (with error note).
+
+### Resume After Interruption
+
+1. Read `notes.md` — find first `[todo]`
+2. Continue from that task
+3. Do NOT re-execute `[done]` tasks
+4. All state lives in `notes.md` — if it's not written down, it didn't happen
+
+### Parallel Execution
+
+Steps marked `[parallel-ok]` contain independent tasks:
+- **Single agent**: Execute tasks sequentially
+- **Cluster** (recommended for 5+ tasks): Dispatch each task row as a sub-agent:
+  ```
+  Sub-agent: "{task title}"
+  1. Read notes.md for context (field names, UIDs, enum values)
+  2. {step-specific instructions}
+  3. Update notes.md: mark row [done] or [fail]
+  ```
+
+Cluster-friendly steps: **3.3** (page builds), **4.2** (JS implementation), **5.2** (workflows).
 
 ---
 
 ## Phase 0: Initialize [sequential]
 
 ### Step 0.1: Read requirements
-- [ ] Read the requirements document — must be the `-requirements.md` version (has user personas + "用户关注" + 交互期望), NOT the `.txt` version (just table lists)
-- [ ] If HTML prototypes (`*.html`) + `design-notes.md` exist in workdir, read them — they define the page UX
+- [ ] Read requirements (`*-requirements.md` — has user personas + "用户关注" + 交互期望)
+- [ ] If HTML prototypes exist (`*.html` + `design-notes.md`), read them for visual patterns
 - [ ] Extract: table prefix, table list, field types, relations, enums, menu structure
-- [ ] Extract **per-page UX expectations**: what users see first, what needs JS blocks, what needs auto-calc
+- [ ] Extract **per-page UX expectations**: first-screen focus, JS blocks, auto-calc needs
 - [ ] Write to `notes.md`:
   ```
   # Build Notes
@@ -23,9 +61,9 @@ Steps marked `[parallel-ok]` can be dispatched to sub-agents. Otherwise just do 
   ```
 
 ### Step 0.2: Clean previous build (if rebuilding)
-- [ ] `nb_clean_prefix("{prefix}")`
-- [ ] `nb_list_routes()` → `nb_delete_route()` for old menu groups
+- [ ] `nb_clean_prefix("{prefix}")` — deletes collections, tables, workflows, AND routes
 - [ ] `nb_delete_workflows_by_prefix("{PREFIX}-")`
+- [ ] Verify: `nb_list_routes()` — old menu should be gone
 
 ---
 
@@ -39,13 +77,16 @@ Steps marked `[parallel-ok]` can be dispatched to sub-agents. Otherwise just do 
 
 ### Step 1.2: Register & setup collections
 - [ ] For each table (parent-first): `nb_setup_collection(name, title, field_interfaces, relations)`
+- [ ] **Include o2m relations on parent tables** — required for `<subtable>` in detail popups later:
+  - e.g. customers → contacts (o2m), customers → opportunities (o2m)
+  - Without these, detail subtables will be empty
 
 ### Step 1.3: Insert seed data
 - [ ] Generate INSERT statements (5-10 rows per table, realistic Chinese data)
 - [ ] `nb_execute_sql(inserts)` — parent tables first
 
 ### Step 1.4: Write notes
-- [ ] Write table list + row counts to `notes.md`
+- [ ] Write table list + row counts + **o2m relations map** to `notes.md`
 
 ---
 
@@ -53,189 +94,225 @@ Steps marked `[parallel-ok]` can be dispatched to sub-agents. Otherwise just do 
 
 ### Step 2.1: Read all fields
 - [ ] For each collection: `nb_fields("{collection_name}")`
-- [ ] Record **exact field names + enum values** in `notes.md` — Phase 3 and 4 depend on this
+- [ ] Record **exact field names + enum option values** in `notes.md`
+- [ ] **Verify o2m relations**: parent collections should show o2m fields
+- [ ] If missing o2m: fix via `nb_create_relation(collection, name, target, type="o2m", foreign_key)`
 
 ---
 
 ## Phase 3: Menu & Pages [sequential then parallel-ok]
 
 **Knowledge**: Read `knowledge/page-building.md`
-**Templates**: Read `templates/pages/index.md` for layout templates + JS template mapping
+**Templates**: Read `templates/pages/index.md` for layout patterns
 
-### Step 3.1: Design each page
-- [ ] Re-read requirements `-requirements.md` → each page's "用户关注" section
-- [ ] If HTML prototypes exist: read `design-notes.md` for UX patterns
-- [ ] For each page, use the mapping rules below to determine pattern + template + JS:
+### Step 3.1: Design ALL pages — Create Page Task Table [sequential]
 
-**Page pattern mapping rules — requirements → template:**
+**Input**: Requirements "用户关注" + HTML prototypes + field names from notes.md
 
-| Requirement pattern | Pattern | Template file | JS blocks to use |
-|---|---|---|---|
-| "打开页面关注" + total/count/数量 KPIs | **A: KPI Strip** | `crud-kpi.json` | `block-kpi.js` for KPI row |
-| "到期提醒" / "待处理" / sidebar alerts | **B: Sidebar** | `crud-sidebar.json` | `block-alert.js` or `sidebar-bars.js` for sidebar |
-| "分布统计" / "比例" in sidebar | **B: Sidebar** | `crud-sidebar.json` | `sidebar-bars.js` or `sidebar-grid.js` for sidebar |
-| "金额汇总" / 多个金额 metric | **C: Financial** | build from A + 3 metrics | `block-financial.js` for banner |
-| "阶段" / "漏斗" / "转化率" | **D: Pipeline** | `crud-pipeline.json` | `sidebar-pipeline.js` + `block-distribution.js` |
-| Simple config/reference data | **E: Simple** | `crud-simple.json` | none |
-| "达成率" / "进度" / "排行" / "目标" | **F: Dashboard** | `crud-dashboard.json` | progress circle + ranking JS |
+For each page, decide:
+1. **Layout pattern** (A-F, see CLAUDE.md)
+2. **JS blocks** for page-level charts/stats
+3. **JS columns** for table display enhancement
+4. **Detail popup design** (see rules below)
+5. **Events** for form auto-calculation
+6. **Subtable prerequisites**: verify parent has o2m relation
 
-**Multiple patterns**: A page can combine patterns. E.g., "KPI + sidebar distribution" = use KPI strip (Pattern A) in row 1, then sidebar (Pattern B) for table area.
+**Write a Page Task Table to `notes.md`**:
 
-- [ ] Write page plan to `notes.md` with columns: Page | Pattern | Template | JS blocks | js_columns
+```
+### Page Tasks
+
+| # | Page | Collection | Pattern | KPI | JS Blocks | JS Cols | Detail Design | Events | Status |
+|---|------|-----------|---------|-----|-----------|---------|---------------|--------|--------|
+| 1 | 客户 | nb_crm_customers | A+B | 5 | 行业分布,等级分布,状态分布 | composite(name) | Tab基本信息: fields + js-item(客户画像: 等级标签+行业+状态+来源+建档天数); Tab联系人: subtable(contacts); Tab商机: subtable(opportunities); Tab合同: subtable(contracts) | 0 | [todo] |
+| 2 | 联系人 | nb_crm_contacts | E | 0 | - | - | auto | 0 | [todo] |
+| 3 | 商机 | nb_crm_opportunities | A+C+D | 4 | 销售漏斗 | composite(title),currency(amount),progress(probability),countdown(expected_date) | Tab基本信息: fields + js-item(商机进度: 阶段进度条+概率+倒计时+金额); Tab报价: subtable(quotes); Tab跟进: subtable(activities) | 2(阶段→概率映射) | [todo] |
+```
+
+**Detail Popup Design Rules**:
+
+| Page type | Detail popup approach |
+|-----------|---------------------|
+| Core business (高频访问，数据关联多) | Multi-tab: 基本信息(fields + `<js-item>`) + 关联数据(`<subtable>` per relation) |
+| Secondary (中频访问) | 1-2 tabs: fields + optional subtable |
+| Reference/Config (配置数据) | Auto-generated (omit `<detail>` → auto from addnew fields) |
+
+**`<js-item>` design pattern** (one per core page's first tab):
+```
+<js-item title="视觉摘要">
+  {status_field}彩色标签({enum_value1}色1/{enum_value2}色2/...) +
+  {category_field}标签 +
+  进度/倒计时/金额/统计 (从"用户关注"提取)
+</js-item>
+```
 
 ### Step 3.2: Create menu structure [sequential]
 - [ ] `nb_create_menu(group_title, parent_id, pages_json)` for each group
-- [ ] Record tab UIDs in `notes.md`
+- [ ] Fill in "Tab UID" column in Page Task Table
 
-### Step 3.3: Build page content [parallel-ok]
+### Step 3.3: Build pages [parallel-ok — each page is one task]
 
-**Process for each page:**
-1. Read the **template JSON file** from `templates/pages/` (per Step 3.1 plan)
-2. Read the **JS template files** listed in `templates/pages/index.md` "JS Templates to Fill" column
-3. Replace placeholders: collection, fields, filters, JS code
-4. **Add `js_columns`** to the table block — read column templates from `templates/js/col-*.js`
-5. Write to pages_batch JSON file
+**For each `[todo]` row in Page Task Table**:
 
-- [ ] For each batch (4-5 pages): write JSON file → `nb_compose_page_file(path)`
-- [ ] Record create_form + edit_form UIDs in `notes.md`
+1. Read the page's design from notes.md task table
+2. **Read the HTML prototype** for this page — compare with your markup to ensure visual fidelity
+3. Write XML markup (`<page>` root) following the pattern:
+   - KPI row: `<kpi>` tags — **ONLY for simple count numbers** (总数, 本月新增)
+   - JS blocks: `<js-block>` with description (NO code) — **for ALL charts/bars/lists/visualizations**
+   - Filter: `<filter>` with `target` binding
+   - Table: `<table>` with columns + `<js-col>` placeholders
+   - Forms: `<addnew>` + `<edit>` with fields DSL
+   - **Detail popup** (core pages):
 
-**js_columns — read HTML prototypes, match column patterns.** See `templates/pages/index.md` and `templates/js/index.md`.
+**⚠️ CRITICAL: `<kpi>` vs `<js-block>` — #1 mistake source**
+```
+<kpi>  = ONE number (auto Statistic count). ONLY for KPI strip at page top.
+<js-block> = ANY visualization (bars, pipeline, grid, alert, list, progress).
+```
+If the HTML prototype shows bars, colored distribution, funnel, alert list, timeline, or anything beyond a single number → use `<js-block>`, NEVER `<kpi>`.
+Sidebar blocks (stacked in `<stack span="8">`) are ALWAYS `<js-block>`.
+     ```xml
+     <detail>
+       <tab title="基本信息" fields="field1|field2\nfield3|field4">
+         <js-item title="视觉摘要">
+           描述要显示什么：标签、进度条、倒计时、统计数字
+         </js-item>
+       </tab>
+       <tab title="关联数据A">
+         <subtable collection="child_coll" assoc="o2m_field" fields="f1,f2,f3" />
+       </tab>
+     </detail>
+     ```
+   - Events: `<event on="formValuesChange">描述逻辑</event>` in `<addnew>`/`<edit>`
+3. Build: `nb_page_markup(tab_uid, markup)`
+4. Update notes.md: mark row `[done]`, record any warnings
 
-**Process**: Read HTML prototype `<table>` → for each `<td>` with rich rendering → pick the matching col-*.js template.
+**Cluster dispatch template** (each page = one sub-agent):
+```
+Build page "{page}" on tab {tab_uid}, collection {collection}.
+Read notes.md for field names and enum values.
+Design from notes.md Page Tasks row #{n}: {detail_design}
+Write XML markup per CLAUDE.md pattern {pattern}, call nb_page_markup.
+Mark [done] in notes.md.
+```
 
-**★ Primary column** — almost every entity table's first column should be `col-composite.js` (bold blue name + gray subtitle). Look at how HTML prototypes render the primary name column (nested divs = composite).
-
-| HTML pattern → js_column template |
-|---|
-| Bold name + gray subtitle (nested divs) → `col-composite.js` ★ most common |
-| ¥ monospace number → `col-currency.js` |
-| "还剩X天" / "已逾期" → `col-countdown.js` |
-| progress bar + % → `col-progress.js` |
-| "N小时前" / "N天前" → `col-relative-time.js` |
-| stars/rating → `col-stars.js` |
-| **Colored tag (select/enum)** → **SKIP, NocoBase native** |
-| **Plain text / relation name** → **SKIP, NocoBase native** |
-
-**Build order**: Reference pages first (Pattern E, simple), then Core/Pipeline/Financial (Pattern A-D, complex).
+**Page build order**: Reference/Config pages first (simple, validates pipeline), then Core pages.
 
 ### Step 3.4: Verify pages [sequential]
+
+**Knowledge**: Read `knowledge/troubleshooting.md` if errors
+
 - [ ] `nb_inspect_all("{prefix}")` — check structure
-- [ ] Confirm: non-Reference pages have JS blocks AND js_columns, not just filter+table
-- [ ] If a page has "用户关注" but only filter+table → fix it with the correct pattern
+- [ ] For core pages: verify detail popup has planned tabs + js-items + subtables
+- [ ] Every `<subtable>` must have matching o2m relation on parent (`nb_list_fields`)
+- [ ] Fix broken pages: `nb_clean_tab(tab_uid)` → rebuild corrected markup
+- [ ] Update Page Task Table: all should be `[done]`
 
 ---
 
-## Phase 4: JS Enhancement [parallel-ok — RECOMMEND sub-agents]
+## Phase 3B: Form & Detail Refinement [parallel-ok — each form is one task]
+
+### Step 3B.1: Scan form quality [sequential]
+- [ ] `nb_auto_forms("{PREFIX}")` — generates task table with coverage %
+- [ ] Copy task table to `notes.md`
+
+### Step 3B.2: Refine each [todo] form [parallel-ok]
+
+For each `[todo]` addnew/edit form:
+1. Read HTML prototype for the page
+2. Read collection fields from `notes.md`
+3. Design form layout with sections (`--- Title`) and side-by-side fields (`a | b`)
+4. Call `nb_set_form(table_uid, form_type, fields_dsl, events?)`
+5. Mark `[done]` in Form Task Table
+
+For each `[todo]` detail popup:
+1. Read HTML prototype + o2m relations from `notes.md`
+2. Design tabs: basic info (fields + js_items) + relation tabs (subtables)
+3. Call `nb_set_detail(table_uid, detail_json)`
+4. Mark `[done]` in Form Task Table
+
+**Cluster dispatch template** (each form = one sub-agent):
+```
+Refine {form_type} form for "{page}" table {table_uid}.
+Collection: {collection}. Available fields: {fields}.
+1. Read notes.md for enum values and relations
+2. Design form with sections and side-by-side fields
+3. Call nb_set_form / nb_set_detail
+4. Mark [done] in notes.md
+```
+
+---
+
+## Phase 4: JS Implementation [parallel-ok — RECOMMEND cluster]
 
 **Knowledge**: Read `knowledge/js-sandbox.md`
 **Templates**: Read `templates/js/index.md` for available patterns
 
-**Phase 4 adds JS that WASN'T built in Phase 3.** Phase 3 should have already created: page-level JS blocks (KPI, sidebar, distribution) and inline js_columns in table blocks. Phase 4 adds: additional standalone blocks, detail popup items, event flows, and any missing columns.
+### Step 4.1: Auto-generate JS files + Task Table [sequential]
+- [ ] `nb_auto_js("{prefix}")` — auto-generates JS files + task table:
+  - **Column placeholders** with templates → auto-filled JS files → `[auto]`
+  - **Blocks/items/events** → stub files with description → `[todo]`
+- [ ] Copy the returned task table to `notes.md`
+- [ ] Review: all `[auto]` files should be ready. Focus on `[todo]` files.
 
-This phase benefits most from parallel execution. Each JS task is independent and involves writing + testing code.
+If `nb_auto_js` is not available, fall back to manual:
+- `nb_find_placeholders("{prefix}")` → write task table manually
+- Create `js/` directory, write files per template
 
-### Recommended: Dispatch sub-agents for JS work
+### Step 4.2: Implement remaining [todo] JS [parallel-ok — cluster recommended]
 
-For **each JS task** (block, column, item, or event flow), dispatch a sub-agent that:
-1. Reads the template file from `templates/js/`
-2. Reads the relevant field info from `notes.md`
-3. Writes the JS code (replacing template placeholders with real values)
-4. Calls the MCP tool (`nb_js_block`, `nb_js_column`, `nb_js_item`, or `nb_event_flow`)
-5. Calls `nb_read_node(uid, "js")` to verify the code was saved correctly
-6. If the code is wrong or the tool failed, fix and retry
+Only `[todo]` items need manual work (blocks, items, events).
+`[auto]` items (columns) are already generated by Step 4.1.
 
-Each sub-agent handles **one JS task end-to-end** (write → deploy → verify). This is better than one agent doing all JS, because:
-- JS code is error-prone — each agent can focus on getting one piece right
-- Debugging is isolated — a failure in one doesn't block others
-- Context stays small — each agent only needs field info for one table/page
+#### Single agent
+For each `[todo]` JS task:
+1. Read matching template from `templates/js/{template}.js`
+2. Replace `{PLACEHOLDER}` markers with real field names/enum values from notes.md
+3. Write to `js/{uid}.js` (events: `js/{uid}__evt__{event_name}.js`)
+4. Mark `[done]` in JS Task Table
 
-**Sub-agent prompt template**:
+#### Cluster (recommended for 10+ [todo] items)
+Dispatch each [todo] task as a sub-agent:
 ```
-You are a JS developer for NocoBase. Your task:
-
-Table: {collection_name}
-Fields: {relevant fields from notes.md}
-Task: {description, e.g. "Add currency column for 'amount' field, threshold ¥100,000"}
-Template: Read templates/js/col-currency.js, replace {FIELD} with "amount", {THRESHOLD} with 100000
-Tool: nb_js_column(table_uid="{uid}", title="{title}", code="{filled code}", width=120)
-Verify: nb_read_node("{resulting_uid}", "js") — confirm code is correct
-
-If it fails, read the error and fix the code.
+Implement JS placeholder {uid}
+Kind: {kind}, Title: {title}
+Collection: {collection}, Field: {field}
+Description: {desc}
+1. Read templates/js/{template}.js
+2. Read notes.md for {collection} field names and enum values
+3. Write JS (replace template placeholders with real values)
+4. Write to js/{uid}.js
+5. Mark [done] in notes.md
 ```
 
-### Five JS extension types
+### Step 4.3: Deploy all JS [sequential]
+- [ ] `nb_inject_js_dir("js/")` — batch inject all files (auto + manual)
+- [ ] Check results — fix any failed files and re-run
 
-| Type | Tool | Template prefix | Where it goes |
-|------|------|----------------|---------------|
-| **Block** | `nb_js_block(parent, title, code)` | `block-*`, `sidebar-*` | Page-level (KPI, charts, sidebars) |
-| **Column** | `nb_js_column(table_uid, title, code, width)` | `col-*` | Table column |
-| **Item** | `nb_js_item(grid_uid, title, code)` | `item-*` | Detail/form popup |
-| **Event** | `nb_event_flow(form_uid, event_name, code)` | `event-*` | Form behavior |
-| **Update** | `nb_update_js(uid, code, title)` | — | Modify any existing JS node |
+### Placeholder kind → Template mapping
+
+| Kind | Templates | Tool |
+|------|-----------|------|
+| column/composite | `col-composite.js` | `nb_inject_js(uid, code)` |
+| column/currency | `col-currency.js` | `nb_inject_js(uid, code)` |
+| column/countdown | `col-countdown.js` | `nb_inject_js(uid, code)` |
+| column/progress | `col-progress.js` | `nb_inject_js(uid, code)` |
+| column/relative_time | `col-relative-time.js` | `nb_inject_js(uid, code)` |
+| column/stars | `col-stars.js` | `nb_inject_js(uid, code)` |
+| column/comparison | `col-comparison.js` | `nb_inject_js(uid, code)` |
+| block (KPI/chart) | `block-kpi.js`, `block-distribution.js`, `block-financial.js`, `block-alert.js` | `nb_inject_js(uid, code)` |
+| block (sidebar) | `sidebar-bars.js`, `sidebar-grid.js`, `sidebar-pipeline.js` | `nb_inject_js(uid, code)` |
+| item | `item-lifecycle.js`, `item-stats.js`, `item-gauge.js` | `nb_inject_js(uid, code)` |
+| event | `event-calc.js`, `event-mapping.js`, `event-autofill.js` | `nb_inject_js(uid, code, event_name=...)` |
 
 ### Rules
-- **NO js_columns for select/enum/tag fields** (等级/状态/类型/优先级/来源) — NocoBase renders colored tags natively. This is the #1 mistake to avoid.
-- JS columns ONLY for: currency ¥, countdown, progress bar, stars, relative-time, composite, comparison — things NocoBase CANNOT render natively
-- Event flow targets must be **create_form** or **edit_form** UIDs (from notes.md Phase 3)
-- Event names: `formValuesChange` (field changes), `beforeRender` (form opens), `afterSubmit` (after save)
+- **NO js_columns for select/enum/tag fields** — NocoBase renders colored tags natively. #1 mistake.
+- JS columns ONLY for: composite, currency, countdown, progress, relative_time, stars, comparison
+- Event names: `formValuesChange`, `beforeRender`, `afterSubmit`
 
-### Step 4.1: Plan JS enhancements
-- [ ] Review each page's "用户关注" from requirements
-- [ ] For each page, apply the mapping rules below to identify needed JS tasks
-- [ ] List all JS tasks with type, target UID, and template file
-- [ ] Write plan to `notes.md`
-
-**Mapping rules — when to use each template:**
-
-| Requirement pattern | Template | Example |
-|---|---|---|
-| "打开页面关注" + counts/totals | `block-kpi.js` | 员工总数/在职/离职 → KPI strip |
-| "分布统计" / "比例" / "漏斗" | `block-distribution.js` | 性别分布, 学历分布, 状态漏斗 |
-| "金额汇总" / "按X统计金额" | `block-financial.js` | 各部门薪资总额 |
-| "到期提醒" / "N天内" alert | `block-alert.js` | 合同90天内到期列表 |
-| decimal/金额 field + "¥格式" | `col-currency.js` | 薪资, 预算, 期望薪资 |
-| date field + "倒计时" / "剩余天数" | `col-countdown.js` | 合同到期日, 截止日期 |
-| "进度条" / "使用率" / "达成率" | `col-progress.js` | 编制使用率, 目标达成率 |
-| date field + "相对时间" / "入职N年" | `col-relative-time.js` | 入职日期, 创建时间 |
-| "评分" / "星级" | `col-stars.js` | 满意度评分 |
-| "状态流转" / "阶段可视化" in detail | `item-lifecycle.js` | 候选人状态流, 商机阶段 |
-| "自动计算" formula in form | `event-calc.js` | 实发=基本+奖金-扣除 |
-| "自动填充" current user/date | `event-autofill.js` | 审批人, 创建日期 |
-| field A changes → update field B mapping | `event-mapping.js` | 阶段→概率 |
-
-**Rule**: Every non-Reference page should have at least 1 JS block (KPI or distribution). If a page has "打开页面关注" in requirements, it MUST have a `block-kpi.js`.
-
-### Step 4.2: Implement JS blocks [parallel-ok, recommend sub-agents]
-For each page block (KPI strip, distribution chart, financial summary, alert panel, sidebar):
-- [ ] Read template `templates/js/block-{type}.js` or `sidebar-{type}.js`
-- [ ] Replace placeholders → complete code
-- [ ] `nb_js_block(parent_uid, title, code)`
-- [ ] Verify: `nb_read_node(uid, "js")`
-
-### Step 4.3: Implement JS columns [parallel-ok, recommend sub-agents]
-For each column:
-- [ ] Read template `templates/js/col-{type}.js`
-- [ ] Replace placeholders → complete code
-- [ ] `nb_js_column(table_uid, title, code, width)` or batch via `nb_js_enhance_file`
-- [ ] Verify: `nb_read_node(uid, "js")`
-
-### Step 4.4: Implement JS items [parallel-ok, recommend sub-agents]
-For each detail/form custom item (lifecycle, stats, gauge):
-- [ ] Read template `templates/js/item-{type}.js`
-- [ ] Replace placeholders → complete code
-- [ ] `nb_js_item(grid_uid, title, code)`
-- [ ] Verify: `nb_read_node(uid, "js")`
-
-### Step 4.5: Implement event flows [parallel-ok, recommend sub-agents]
-For each form event:
-- [ ] Read template `templates/js/event-{type}.js`
-- [ ] Replace placeholders
-- [ ] `nb_event_flow(form_uid, event_name, code)` — use correct event_name per template
-- [ ] Use **create_form** or **edit_form** UID from notes.md
-
-### Step 4.6: Verify JS [sequential]
+### Step 4.3: Verify JS [sequential]
 - [ ] `nb_inspect_all("{prefix}")` — check all JS applied
-- [ ] Mark each item done/fail in `notes.md`
+- [ ] Update JS Task Table: all should be `[done]`
 
 ---
 
@@ -244,19 +321,19 @@ For each form event:
 **Knowledge**: Read `knowledge/workflows.md`
 **Templates**: Read `templates/workflows/index.md`
 
-### Step 5.1: Plan workflows
+### Step 5.1: Plan workflows [sequential]
 - [ ] From requirements, identify:
   - Auto-numbering (which tables need sequence IDs?)
   - Status sync (which changes cascade to related tables?)
-  - Auto-calculation (which should happen server-side vs client event flow?)
+  - Auto-calculation (server-side vs client event flow?)
   - Date reminders (which date fields need advance warnings?)
-- [ ] Write plan to `notes.md`
+- [ ] Write **Workflow Task Table** to `notes.md`
 
 ### Step 5.2: Create workflows [parallel-ok]
-For each workflow:
+For each workflow task:
 - [ ] Read template from `templates/workflows/`
 - [ ] `nb_create_workflow` → `nb_add_node` (× N) → `nb_enable_workflow`
-- [ ] Record workflow ID in `notes.md`
+- [ ] Mark `[done]` in Workflow Task Table
 
 ---
 
@@ -279,10 +356,10 @@ For each workflow:
 - [ ] `nb_inspect_all("{prefix}")` — full system overview
 - [ ] `nb_list_workflows()` — all enabled
 - [ ] `nb_list_ai_employees()` — all exist
-- [ ] Update `notes.md` with summary:
+- [ ] Update `notes.md` summary:
   ```
   ## Summary
-  Tables: {N}, Pages: {N}, JS columns: {N}, Sidebars: {N}
+  Tables: {N}, Pages: {N}, JS placeholders: {N}, JS implemented: {N}
   Event flows: {N}, Workflows: {N}, AI employees: {N}
   ## Status: COMPLETE
   ```
@@ -291,12 +368,15 @@ For each workflow:
 
 ## notes.md — The Notebook
 
-Your shared state file. Three purposes:
-1. **Progress tracker** — which steps done/pending/fail
-2. **Data store** — UIDs, field names, enum values for later steps
-3. **Resume point** — read notes.md to continue after interruption
+Your shared state file. Four purposes:
+1. **Progress tracker** — which phases/steps are complete
+2. **Task tables** — Page Tasks, JS Tasks, Workflow Tasks (per-item status)
+3. **Data store** — UIDs, field names, enum values
+4. **Resume point** — after crash, find first `[todo]`, continue from there
 
 **Rules**:
 - Write after EVERY step
-- Use `[done]` / `[todo]` / `[fail]` markers
+- Create task tables after planning steps (3.1, 4.1, 5.1)
+- Use `[done]` / `[todo]` / `[fail]` markers on every task row
 - Include UIDs and exact values — later steps depend on them
+- On resume: scan for first `[todo]`, execute it, mark `[done]`, repeat

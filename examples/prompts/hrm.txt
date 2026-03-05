@@ -3,7 +3,7 @@ Build an HRM (Human Resource Management) system in NocoBase.
 ## Tables (prefix: nb_hr_)
 
 1. departments — 部门 (name, code, description:textarea, status[active/inactive]; parent m2o→departments for tree structure)
-2. positions — 岗位 (name, code, level[初级/中级/高级/专家], department_id:integer, headcount:integer, description:textarea, status[招聘中/已满编]; m2o→departments)
+2. positions — 岗位 (name, code, level[初级/中级/高级/专家], headcount:integer, description:textarea, status[招聘中/已满编]; m2o→departments)
 3. employees — 员工 (name, employee_no, phone, email, gender[男/女], birth_date:date, id_card, address, entry_date:date, leave_date:date, status[试用期/在职/离职], education[高中/大专/本科/硕士/博士], remark; m2o→departments, m2o→positions)
 4. contracts — 劳动合同 (contract_no, type[固定期限/无固定期限/实习], start_date:date, end_date:date, salary:decimal, status[生效中/已到期/已终止]; m2o→employees)
 5. attendance — 考勤记录 (date:date, check_in:datetime, check_out:datetime, status[正常/迟到/早退/缺勤/外勤], work_hours:decimal, remark; m2o→employees)
@@ -25,19 +25,33 @@ Build an HRM (Human Resource Management) system in NocoBase.
   - 薪酬福利 (group): 薪资发放, 薪资项目
   - 招聘培训 (group): 招聘管理, 候选人, 培训管理
 
-## Phase 6: JS Enhancement
+## Page Types (IMPORTANT — determines what blocks each page gets)
 
-For each list page, create **business-relevant JS blocks** that help HR managers and team leads make decisions. Think about what they need at a glance: workforce composition, attendance patterns, salary distribution, recruitment pipeline status, training completion rates. Use antd components creatively — don't just show a count.
-
-JS columns for: status fields (color tags), salary/money fields (¥ formatted), date fields (contract expiry countdown, attendance time display).
-
-Event flows for: auto-fill current user as approved_by, auto-calculate net_salary (base+bonus-deduction-insurance-tax), auto-calculate overtime hours.
+| Page | Type | JS Blocks Required |
+|------|------|--------------------|
+| 部门管理 | Reference | filter + table only |
+| 岗位管理 | Reference | filter + table only |
+| 员工花名册 | Core Business | Summary cards (总数/在职/试用期/离职) + Education/gender distribution |
+| 考勤记录 | Activity | Today stats (出勤率/迟到/缺勤) + Status distribution + table |
+| 请假管理 | Alert/Monitor | Pending approvals alert list + Type stats + table |
+| 加班管理 | Alert/Monitor | Pending approvals alert + Monthly hours stats + table |
+| 薪资发放 | Financial | Period summary (month total/paid/pending) + Status breakdown + table |
+| 薪资项目 | Reference | filter + table only |
+| 招聘管理 | Core Business | Summary cards (在招/已完成/暂停) + Pipeline overview + table |
+| 候选人 | Pipeline | Recruitment funnel (待筛选→面试中→已录用→已入职) + table |
+| 培训管理 | Target/Progress | Budget tracking + Completion rates + table |
 
 ## Phases
 
-1. SQL DDL + DML (sample data, 5-10 rows per table)
+1. SQL DDL + DML (sample data, 5-10 rows per table). Use nb_execute_sql_file for all DDL+DML in one call.
 2. nb_setup_collection for all 14 tables (with field upgrades + relations)
-3. nb_create_menu + nb_crud_page for all pages (record create_form/edit_form UIDs in notes.md!)
-4. Workflows (contract expiry reminder, leave approval, overtime approval, payroll confirmation, recruitment status update)
-5. AI Employees (HR assistant, payroll advisor)
-6. JS Enhancement (columns + business blocks + event flows)
+3. Build pages with nb_compose_page_file:
+   a. Call nb_fields() for ALL collections FIRST. Save field names + enum values to notes.md.
+   b. Read hrm-requirements.md — understand what each page is FOR.
+   c. Build Reference pages first (部门, 岗位, 薪资项目) — batch 1.
+   d. Build Core/Pipeline/Financial pages (员工花名册, 招聘管理, 候选人, 薪资发放) — batch 2. Each MUST have type:"js" blocks with working code.
+   e. Build Activity/Alert/Target pages (考勤, 请假, 加班, 培训管理) — batch 3.
+   f. Record form UIDs in notes.md!
+4. JS columns (status tags, money format, date countdown) + event flows (auto-fill, auto-calculate)
+5. Workflows (contract expiry reminder, leave approval, overtime approval, payroll confirmation, recruitment status update)
+6. AI Employees (HR assistant, payroll advisor)
