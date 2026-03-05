@@ -176,6 +176,15 @@ class TreeBuilder:
     def _load_meta(self, coll: str):
         self.nb._load_meta(coll)
 
+    def _filter_fields(self, coll: str, fields: list) -> list:
+        """Filter field list to only existing fields. Appends warnings for skipped."""
+        valid, _ = self.nb._filter_valid_fields(coll, fields)
+        return valid
+
+    def _valid_collection(self, coll: str) -> bool:
+        """Check if collection exists and has registered fields."""
+        return self.nb._valid_collection(coll)
+
     # ── Atomic node builders ───────────────────────────────────
 
     def column_node(self, coll: str, field: str, idx: int,
@@ -217,6 +226,125 @@ class TreeBuilder:
         col_node.add_child("field", "object", field_node)
         return col_node
 
+    # ── Built-in JS column templates (DSL expansion) ──────────────────
+
+    _JS_COL_TEMPLATES: dict[str, str] = {
+        "composite": (
+            "const r=ctx.record||{};const h=ctx.React.createElement;"
+            "ctx.render(h('div',null,"
+            "h('div',{style:{fontWeight:500,fontSize:13,lineHeight:'20px',color:'#1890ff'}},"
+            "r.{field}||'-'),"
+            "h('div',{style:{color:'#8c8c8c',fontSize:12,marginTop:2}},"
+            "[{subs_str}].map(function(f){return r[f]}).filter(Boolean).join(' \\u00b7 ')||'')));"
+        ),
+        "currency": (
+            "const v=Number((ctx.record||{}).{field})||0;"
+            "ctx.render(ctx.React.createElement('span',"
+            "{style:{fontFamily:'monospace',color:v>={threshold}?'#cf1322':'#333'}},"
+            "'\\u00a5'+v.toLocaleString('zh-CN',{minimumFractionDigits:2})));"
+        ),
+        "countdown": (
+            "const d=(ctx.record||{}).{field};"
+            "if(!d){ctx.render(ctx.React.createElement('span',{style:{color:'#bbb'}},'-'));return;}"
+            "const diff=Math.ceil((new Date(d)-new Date())/86400000);"
+            "const color=diff<0?'#cf1322':diff<7?'#fa8c16':diff<30?'#d46b08':'#52c41a';"
+            "const text=diff<0?'\\u5df2\\u903e\\u671f'+(-diff)+'\\u5929':"
+            "diff===0?'\\u4eca\\u5929':'\\u8fd8\\u5269'+diff+'\\u5929';"
+            "ctx.render(ctx.React.createElement('span',{style:{color:color,fontWeight:500}},text));"
+        ),
+        "progress": (
+            "const v=Math.min(100,Math.max(0,Number((ctx.record||{}).{field})||0));"
+            "const h=ctx.React.createElement;const color=v>=80?'#52c41a':v>=50?'#1890ff':"
+            "v>=30?'#faad14':'#ff4d4f';"
+            "ctx.render(h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},"
+            "h('div',{style:{flex:1,height:'6px',background:'#f0f0f0',borderRadius:'3px',overflow:'hidden'}},"
+            "h('div',{style:{width:v+'%',height:'100%',background:color,borderRadius:'3px'}})),"
+            "h('span',{style:{fontSize:'12px',color:color,minWidth:'36px'}},v+'%')));"
+        ),
+        "relative_time": (
+            "const d=(ctx.record||{}).{field};"
+            "if(!d){ctx.render(ctx.React.createElement('span',{style:{color:'#bbb'}},'-'));return;}"
+            "const s=Math.floor((Date.now()-new Date(d))/1000);"
+            "const t=s<60?s+'\\u79d2\\u524d':s<3600?Math.floor(s/60)+'\\u5206\\u949f\\u524d':"
+            "s<86400?Math.floor(s/3600)+'\\u5c0f\\u65f6\\u524d':"
+            "s<2592000?Math.floor(s/86400)+'\\u5929\\u524d':Math.floor(s/2592000)+'\\u6708\\u524d';"
+            "ctx.render(ctx.React.createElement('span',{style:{color:'#8c8c8c',fontSize:'13px'}},t));"
+        ),
+        "stars": (
+            "const v=Math.min(5,Math.max(0,Math.round(Number((ctx.record||{}).{field})||0)));"
+            "const s='\\u2605'.repeat(v)+'\\u2606'.repeat(5-v);"
+            "ctx.render(ctx.React.createElement('span',{style:{color:'#faad14',letterSpacing:'2px'}},s));"
+        ),
+        "comparison": (
+            "const r=ctx.record||{};const h=ctx.React.createElement;"
+            "const t=Number(r.{target})||1;const a=Number(r.{actual})||0;"
+            "const pct=Math.min(100,Math.round(a/t*100));"
+            "const color=pct>=100?'#52c41a':pct>=60?'#1890ff':'#ff4d4f';"
+            "ctx.render(h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},"
+            "h('div',{style:{flex:1,height:'6px',background:'#f0f0f0',borderRadius:'3px',overflow:'hidden'}},"
+            "h('div',{style:{width:pct+'%',height:'100%',background:color,borderRadius:'3px'}})),"
+            "h('span',{style:{fontSize:'12px',color:color,minWidth:'36px'}},pct+'%')));"
+        ),
+    }
+
+    _JS_COL_DEFAULTS: dict[str, dict[str, Any]] = {
+        "composite": {"width": 200},
+        "currency": {"width": 120, "threshold": 100000},
+        "countdown": {"width": 100},
+        "progress": {"width": 120},
+        "relative_time": {"width": 100},
+        "stars": {"width": 100},
+        "comparison": {"width": 120},
+    }
+
+    @classmethod
+    def _expand_js_column(cls, spec: dict) -> tuple[str, str, int | None]:
+        """Expand a DSL js_column spec into (title, code, width).
+
+        DSL format: {"type": "composite", "title": "客户", "field": "name",
+                     "subs": ["city", "source"], "width": 200}
+        Legacy format: {"title": "...", "code": "...", "width": 120}
+        """
+        if "code" in spec:
+            return spec["title"], spec["code"], spec.get("width")
+
+        col_type = spec.get("type", "")
+        template = cls._JS_COL_TEMPLATES.get(col_type)
+        if not template:
+            raise ValueError(f"Unknown js_column type: {col_type!r}. "
+                             f"Available: {list(cls._JS_COL_TEMPLATES.keys())}")
+
+        defaults = cls._JS_COL_DEFAULTS.get(col_type, {})
+        title = spec.get("title", spec.get("field", col_type))
+        width = spec.get("width", defaults.get("width"))
+        field = spec.get("field", "")
+
+        if col_type == "composite":
+            subs = spec.get("subs", [])
+            subs_str = ",".join(f'"{s}"' for s in subs)
+            code = template.replace("{field}", field).replace("{subs_str}", subs_str)
+        elif col_type == "currency":
+            threshold = spec.get("threshold", defaults.get("threshold", 100000))
+            code = template.replace("{field}", field).replace("{threshold}", str(threshold))
+        elif col_type == "comparison":
+            code = template.replace("{target}", spec.get("target", "target")) \
+                           .replace("{actual}", spec.get("actual", "actual"))
+        else:
+            code = template.replace("{field}", field)
+
+        return title, code, width
+
+    def js_column_node(self, title: str, code: str, sort: int = 50,
+                       width: int | None = None) -> TreeNode:
+        """JSColumnModel — custom JS-rendered column in a table."""
+        sp: dict[str, Any] = {
+            "jsSettings": {"runJs": {"version": "v1", "code": code}},
+            "tableColumnSettings": {"title": {"title": title}},
+        }
+        if width:
+            sp["tableColumnSettings"]["width"] = {"width": width}
+        return TreeNode("JSColumnModel", sp, sort)
+
     def form_item_node(self, coll: str, field: str, idx: int,
                        required: bool = False, props: dict | None = None) -> TreeNode:
         """FormItemModel + nested EditFieldModel."""
@@ -247,7 +375,14 @@ class TreeBuilder:
             sp["editItemSettings"] = eis
 
         item_node = TreeNode("FormItemModel", sp, idx)
-        field_node = TreeNode(edit, {}, 0)
+
+        # RecordSelect / SubForm / SubTable need their own fieldSettings
+        # to resolve the association target on the frontend.
+        edit_sp: dict[str, Any] = {}
+        if edit in ("RecordSelectFieldModel", "SubFormFieldModel", "SubTableFieldModel"):
+            edit_sp["fieldSettings"] = STEP_PARAMS_TEMPLATES["field_init"](coll, field)["fieldSettings"]
+
+        field_node = TreeNode(edit, edit_sp, 0)
         item_node.add_child("field", "object", field_node)
         return item_node
 
@@ -287,6 +422,7 @@ class TreeBuilder:
         """FormGridModel with form items, gridSettings computed in memory.
 
         Returns a FormGridModel TreeNode with all FormItemModel children attached.
+        Invalid fields are silently skipped with warnings.
         """
         items, auto_req = _normalize_fields(fields_dsl)
         all_req = (required or set()) | auto_req
@@ -310,8 +446,39 @@ class TreeBuilder:
                 sizes[row_id] = [24]
                 sort_idx += 1
             elif item["type"] == "row":
+                # Filter out invalid fields and non-editable interfaces
+                _non_editable = {"o2m", "m2m", "o2one", "createdBy", "updatedBy",
+                                 "createdAt", "updatedAt"}
+                valid_cols, skipped = [], []
+                for name, span in item["cols"]:
+                    if not self.nb._valid_field(coll, name):
+                        skipped.append(name)
+                    elif self._iface(coll, name) in _non_editable:
+                        skipped.append(name)
+                    elif self._iface(coll, name) == "m2o":
+                        # Validate m2o target collection exists
+                        target = self._target(coll, name)
+                        if target and not self.nb._valid_collection(target):
+                            skipped.append(name)
+                        else:
+                            valid_cols.append((name, span))
+                    else:
+                        valid_cols.append((name, span))
+                if skipped:
+                    coll_label = self.nb._coll_title_cache.get(coll, coll)
+                    self.nb.warnings.append(
+                        f"form: skipped fields {skipped} in {coll_label}({coll})")
+                if not valid_cols:
+                    continue
+                # Recalculate spans for remaining fields
+                if len(valid_cols) != len(item["cols"]):
+                    total = sum(s for _, s in valid_cols)
+                    if total < 24:
+                        auto = 24 // len(valid_cols)
+                        valid_cols = [(n, auto) for n, _ in valid_cols]
+
                 col_uids, col_sizes = [], []
-                for field_name, span in item["cols"]:
+                for field_name, span in valid_cols:
                     fi = self.form_item_node(
                         coll, field_name, sort_idx,
                         required=(field_name in all_req),
@@ -330,7 +497,10 @@ class TreeBuilder:
         return grid_node
 
     def detail_grid(self, coll: str, fields_dsl: str | list) -> TreeNode:
-        """DetailsGridModel with detail items, gridSettings computed in memory."""
+        """DetailsGridModel with detail items, gridSettings computed in memory.
+
+        Invalid fields are silently skipped with warnings.
+        """
         items, _ = _normalize_fields(fields_dsl)
         rows, sizes, sort_idx = {}, {}, 0
 
@@ -351,8 +521,19 @@ class TreeBuilder:
                 sizes[row_id] = [24]
                 sort_idx += 1
             elif item["type"] == "row":
+                # Filter out invalid fields
+                valid_cols = [(name, span) for name, span in item["cols"]
+                              if self.nb._valid_field(coll, name)]
+                if not valid_cols:
+                    continue
+                if len(valid_cols) != len(item["cols"]):
+                    total = sum(s for _, s in valid_cols)
+                    if total < 24:
+                        auto = 24 // len(valid_cols)
+                        valid_cols = [(n, auto) for n, _ in valid_cols]
+
                 col_uids, col_sizes = [], []
-                for field_name, span in item["cols"]:
+                for field_name, span in valid_cols:
                     di = self.detail_item_node(coll, field_name, sort_idx)
                     grid_node.add_child("items", "array", di)
                     col_uids.append(di.uid)
@@ -368,12 +549,17 @@ class TreeBuilder:
 
     def table_block(self, coll: str, fields: list, first_click: bool = True,
                     title: str | None = None, sort: int = 0,
-                    link_actions: list | None = None) -> TreeNode:
+                    link_actions: list | None = None,
+                    js_columns: list | None = None) -> TreeNode:
         """TableBlockModel with columns, actions. Returns root TreeNode.
 
         The addnew and actcol UIDs are accessible via node._sub_models["actions"]
         and node._sub_models["columns"] respectively.
+        Fields are validated: non-existent fields are skipped with warnings.
         """
+        # Filter invalid fields
+        fields = self._filter_fields(coll, fields)
+
         sp: dict[str, Any] = {
             **STEP_PARAMS_TEMPLATES["resource_init"](coll),
             **STEP_PARAMS_TEMPLATES["table_default_sort"],
@@ -403,6 +589,18 @@ class TreeBuilder:
             col = self.column_node(coll, f, i + 1, click=(first_click and i == 0))
             tbl.add_child("columns", "array", col)
 
+        # JS columns — supports both DSL (type+field) and legacy (code) format
+        if js_columns:
+            base_sort = len(fields) + 1
+            for j, jc in enumerate(js_columns):
+                title, code, width = self._expand_js_column(jc)
+                jc_node = self.js_column_node(
+                    title, code,
+                    sort=base_sort + j,
+                    width=width,
+                )
+                tbl.add_child("columns", "array", jc_node)
+
         # Actions column
         actcol = TreeNode("TableActionsColumnModel",
                           STEP_PARAMS_TEMPLATES["actions_column_title"], 99)
@@ -421,43 +619,87 @@ class TreeBuilder:
 
         return tbl
 
-    def filter_form(self, coll: str, field: str, search_fields: list | None = None,
-                    target_uid: str | None = None, label: str = "Search",
+    def filter_form(self, coll: str, fields: str | list,
+                    target_uid: str | None = None,
                     sort: int = 0) -> TreeNode:
-        """FilterFormBlockModel with single search input. Returns root TreeNode."""
+        """FilterFormBlockModel with multiple filter fields.
+
+        Each field becomes a FilterFormItemModel with appropriate field model
+        (InputFieldModel for text, SelectFieldModel for select/enum,
+        DateOnlyFieldModel for date, RecordSelectFieldModel for m2o, etc.).
+
+        Args:
+            coll: Collection name.
+            fields: Single field name (str) or list of field names.
+            target_uid: Target block UID for filter binding.
+            sort: Sort index for the block.
+        """
         self._load_meta(coll)
-        field_meta = self.nb._field_cache.get(coll, {}).get(field, {})
+        if isinstance(fields, str):
+            fields = [fields]
 
         fb = TreeNode("FilterFormBlockModel",
                       STEP_PARAMS_TEMPLATES["filter_layout_horizontal"], sort)
-
         fg = TreeNode("FilterFormGridModel", {}, 0)
         fb.add_child("grid", "object", fg)
 
-        fi_sp: dict[str, Any] = {
-            "fieldSettings": {"init": {
-                "dataSourceKey": "main", "collectionName": coll, "fieldPath": field}},
-            "filterFormItemSettings": {
-                "init": {
-                    "filterField": {
-                        "name": field,
-                        "title": field.replace("_", " ").title(),
-                        "interface": field_meta.get("interface", "input"),
-                        "type": field_meta.get("type", "string"),
+        filter_paths: list[str] = []
+        first_item_uid: str | None = None
+        item_uids: list[str] = []
+
+        for idx, field in enumerate(fields):
+            field_meta = self.nb._field_cache.get(coll, {}).get(field, {})
+            iface = field_meta.get("interface", "input")
+            title = field_meta.get("uiSchema", {}).get("title") or field.replace("_", " ").title()
+
+            # Pick appropriate edit field model
+            edit_model = EDIT_MAP.get(iface, "InputFieldModel")
+
+            fi_sp: dict[str, Any] = {
+                "fieldSettings": {"init": {
+                    "dataSourceKey": "main", "collectionName": coll, "fieldPath": field}},
+                "filterFormItemSettings": {
+                    "init": {
+                        "filterField": {
+                            "name": field,
+                            "title": title,
+                            "interface": iface,
+                            "type": field_meta.get("type", "string"),
+                        },
+                        **({"defaultTargetUid": target_uid} if target_uid else {}),
                     },
-                    **({"defaultTargetUid": target_uid} if target_uid else {}),
+                    "showLabel": {"showLabel": True},
+                    "label": {"label": title},
                 },
-                "showLabel": {"showLabel": True},
-                "label": {"label": label},
-            },
-        }
-        fi = TreeNode("FilterFormItemModel", fi_sp, 10)
-        fi.add_child("field", "object", TreeNode("InputFieldModel", {}, 0))
-        fg.add_child("items", "array", fi)
+            }
+            fi = TreeNode("FilterFormItemModel", fi_sp, idx + 1)
+
+            # Field model — RecordSelect needs fieldSettings for association
+            edit_sp: dict[str, Any] = {}
+            if edit_model in ("RecordSelectFieldModel", "SubFormFieldModel"):
+                edit_sp["fieldSettings"] = {"init": {
+                    "dataSourceKey": "main", "collectionName": coll, "fieldPath": field}}
+            fi.add_child("field", "object", TreeNode(edit_model, edit_sp, 0))
+            fg.add_child("items", "array", fi)
+
+            filter_paths.append(field)
+            item_uids.append(fi.uid)
+            if first_item_uid is None:
+                first_item_uid = fi.uid
+
+        # Grid layout: all items in one row, equal column spans
+        if len(item_uids) > 1:
+            n = len(item_uids)
+            span = max(4, 24 // n)  # min 4 cols per item
+            row_id = uid()
+            fg.step_params = {"gridSettings": {"grid": {
+                "rows": {row_id: [[u] for u in item_uids]},
+                "sizes": {row_id: [span] * n},
+            }}}
 
         # Stash filter info for filterManager
-        fb._filter_item_uid = fi.uid
-        fb._filter_paths = search_fields or [field]
+        fb._filter_item_uid = first_item_uid
+        fb._filter_paths = filter_paths
 
         return fb
 
@@ -630,7 +872,18 @@ class TreeBuilder:
     def _sub_table_node(self, parent_coll: str, assoc: str, target_coll: str,
                         fields: list, title: str | None = None,
                         sort: int = 0) -> TreeNode:
-        """Association sub-table TreeNode."""
+        """Association sub-table TreeNode. Validates target collection and fields."""
+        # Validate target collection
+        if not self._valid_collection(target_coll):
+            self.nb.warnings.append(
+                f"sub_table: target collection '{target_coll}' has no registered fields")
+        # Validate association field exists on parent
+        if not self.nb._valid_field(parent_coll, assoc):
+            self.nb.warnings.append(
+                f"sub_table: association '{assoc}' not found on '{parent_coll}'")
+        # Filter invalid fields
+        fields = self._filter_fields(target_coll, fields)
+
         sp: dict[str, Any] = STEP_PARAMS_TEMPLATES["resource_init"](target_coll)
         sp["resourceSettings"]["init"].update({
             "associationName": f"{parent_coll}.{assoc}",
@@ -656,6 +909,33 @@ class TreeBuilder:
         tbl._actcol = actcol
 
         return tbl
+
+    def detail_block(self, coll: str, fields_dsl: str | list,
+                     title: str | None = None, sort: int = 0) -> TreeNode:
+        """Standalone DetailsBlockModel for page-level use (not just popup)."""
+        sp: dict[str, Any] = STEP_PARAMS_TEMPLATES["resource_init_with_tk"](coll)
+        if title:
+            sp.update(STEP_PARAMS_TEMPLATES["card_title"](title))
+        det = TreeNode("DetailsBlockModel", sp, sort)
+        dg = self.detail_grid(coll, fields_dsl)
+        det.add_child("grid", "object", dg)
+        return det
+
+    def form_block(self, coll: str, fields_dsl: str | list,
+                   mode: str = "create", title: str | None = None,
+                   required: set | None = None, props: dict | None = None,
+                   sort: int = 0) -> TreeNode:
+        """Standalone Create/Edit form block for page-level use."""
+        model = "CreateFormModel" if mode == "create" else "EditFormModel"
+        tmpl = "resource_init" if mode == "create" else "resource_init_with_tk"
+        sp: dict[str, Any] = STEP_PARAMS_TEMPLATES[tmpl](coll)
+        if title:
+            sp.update(STEP_PARAMS_TEMPLATES["card_title"](title))
+        fm = TreeNode(model, sp, sort)
+        fm.add_child("actions", "array", TreeNode("FormSubmitActionModel", {}, 0))
+        fg = self.form_grid(coll, fields_dsl, required, props)
+        fm.add_child("grid", "object", fg)
+        return fm
 
     def detail_popup(self, coll: str, tabs: list) -> TreeNode:
         """ChildPageModel for detail popup with tabs.
@@ -726,9 +1006,8 @@ class TreeBuilder:
         # ── Filter ──
         filter_node = None
         if filter_fields:
-            first_field = filter_fields[0] if filter_fields else "name"
             filter_node = self.filter_form(
-                coll, first_field, search_fields=filter_fields,
+                coll, filter_fields,
                 target_uid=tbl.uid, sort=sort_idx)
             root.add_child("items", "array", filter_node)
             sort_idx += 1
@@ -819,62 +1098,258 @@ class TreeBuilder:
         meta["node_count"] = root.count_nodes()
         return root, meta
 
-    # ── Template support ───────────────────────────────────────
+    # ── Free-form page composition ─────────────────────────────
 
-    @staticmethod
-    def extract_template(tree_dict: dict, collection: str, name: str) -> dict:
-        """Extract a reusable template from a page tree JSON.
+    def compose_page(self, tab_uid: str, blocks: list[dict],
+                     layout: list | None = None) -> tuple[TreeNode, dict]:
+        """Build a page from free-form block definitions.
 
-        Replaces all UIDs with placeholders and collection references with markers.
+        Unlike crud_page which forces KPI+Filter+Table+Form, this lets you
+        freely combine any blocks in any layout.
+
+        Args:
+            tab_uid: Tab UID (for filterManager binding)
+            blocks: List of block defs, each with:
+                - id: label for layout reference (default "block_0", etc.)
+                - type: "table"|"filter"|"form"|"detail"|"js"|"kpi"|"outline"
+                - ... type-specific fields
+                Table blocks support js_columns: list of {title, code, width?}
+            layout: Rows of [block_id, span] pairs. None = auto-stack.
+                Column stacking: use [["id_a","id_b"], span] to stack
+                multiple blocks vertically in one column.
+
+        Returns:
+            (root_node, meta_dict) with block UIDs and node count.
         """
-        raw = json.dumps(tree_dict)
-        # Replace collection name with placeholder
-        raw = raw.replace(f'"{collection}"', '"__COLLECTION__"')
-        template = json.loads(raw)
-        template["_template_name"] = name
-        template["_source_collection"] = collection
-        return template
+        root = TreeNode("BlockGridModel", {}, 0)
+        meta: dict[str, Any] = {"grid_uid": root.uid}
+        warnings: list[str] = []
 
-    @staticmethod
-    def apply_template(template: dict, target_collection: str,
-                       field_map: dict | None = None) -> dict:
-        """Apply a template to create a new page tree.
+        block_map: dict[str, TreeNode] = {}   # id → node
+        block_nodes: list[TreeNode] = []
+        filter_managers: list[dict] = []
 
-        Generates fresh UIDs and replaces collection/field references.
+        for i, bdef in enumerate(blocks):
+            bid = bdef.get("id", f"block_{i}")
+            btype = bdef.get("type", "")
+
+            try:
+                node = self._build_block(btype, bdef, i, meta, warnings)
+            except Exception as e:
+                warnings.append(f"block '{bid}' ({btype}): {e}")
+                continue
+
+            root.add_child("items", "array", node)
+            block_map[bid] = node
+            block_nodes.append(node)
+            meta[f"{bid}_uid"] = node.uid
+
+        # ── Table popups (addnew / edit / detail) ──
+        for i, bdef in enumerate(blocks):
+            bid = bdef.get("id", f"block_{i}")
+            if bdef.get("type") != "table" or bid not in block_map:
+                continue
+            tbl = block_map[bid]
+            coll = bdef["collection"]
+
+            addnew_fields = bdef.get("addnew_fields")
+            edit_fields = bdef.get("edit_fields") or addnew_fields
+
+            if addnew_fields and hasattr(tbl, "_addnew"):
+                addnew_cp = self.addnew_form(coll, addnew_fields)
+                tbl._addnew.add_child("page", "object", addnew_cp)
+                meta[f"{bid}_create_form"] = addnew_cp._create_form_uid
+
+            if edit_fields and hasattr(tbl, "_actcol"):
+                edit_node = self.edit_action(coll, edit_fields)
+                tbl._actcol.add_child("actions", "array", edit_node)
+                meta[f"{bid}_edit_form"] = edit_node._edit_form_uid
+
+            # Detail popup: explicit tabs > auto-generate from addnew_fields > auto from table fields
+            detail_tabs = bdef.get("detail_tabs")
+            if detail_tabs == "none":
+                # Explicitly disabled
+                pass
+            elif hasattr(tbl, "_click_field") and tbl._click_field:
+                cf = tbl._click_field
+                if not detail_tabs:
+                    # Auto-generate detail tab from addnew_fields or table fields
+                    auto_fields = addnew_fields or bdef.get("fields", [])
+                    if isinstance(auto_fields, str):
+                        auto_fields = auto_fields.replace("*", "")
+                    elif isinstance(auto_fields, list):
+                        auto_fields = "\n".join(auto_fields)
+                    detail_tabs = [{"title": "详情", "fields": auto_fields}]
+
+                cf.step_params["popupSettings"]["openView"].update({
+                    "collectionName": coll, "dataSourceKey": "main",
+                    "mode": "drawer", "size": "large",
+                    "pageModelClass": "ChildPageModel", "uid": cf.uid,
+                })
+                popup_cp = self.detail_popup(coll, detail_tabs)
+                cf.add_child("page", "object", popup_cp)
+
+        # ── Filter → target binding ──
+        for i, bdef in enumerate(blocks):
+            bid = bdef.get("id", f"block_{i}")
+            if bdef.get("type") != "filter" or bid not in block_map:
+                continue
+            target_id = bdef.get("target")
+            if not target_id or target_id not in block_map:
+                if target_id:
+                    warnings.append(f"filter '{bid}': target '{target_id}' not found")
+                continue
+            fnode = block_map[bid]
+            tnode = block_map[target_id]
+            if hasattr(fnode, "_filter_item_uid"):
+                filter_managers.append({
+                    "filterId": fnode._filter_item_uid,
+                    "targetId": tnode.uid,
+                    "filterPaths": fnode._filter_paths,
+                })
+
+        if filter_managers:
+            meta["_filter_manager"] = filter_managers
+
+        # ── Layout ──
+        if layout:
+            rows, sizes = {}, {}
+            seen_refs: set[str] = set()
+            for row_def in layout:
+                row_id = uid()
+                row_cols, row_sizes = [], []
+                for item in row_def:
+                    if isinstance(item, (list, tuple)):
+                        ref = item[0]
+                        span = item[1] if len(item) > 1 else 24
+                    else:
+                        ref, span = item, 24
+                    # ref can be a list of block_ids → stacked column
+                    if isinstance(ref, list):
+                        col_uids = []
+                        for r in ref:
+                            node = block_map.get(r)
+                            if node:
+                                if r in seen_refs:
+                                    warnings.append(f"layout: '{r}' duplicated, skipped")
+                                    continue
+                                seen_refs.add(r)
+                                col_uids.append(node.uid)
+                            else:
+                                warnings.append(f"layout ref '{r}' not found")
+                        if col_uids:
+                            row_cols.append(col_uids)
+                            row_sizes.append(span)
+                    else:
+                        # Single block reference
+                        if ref in seen_refs:
+                            warnings.append(f"layout: '{ref}' duplicated, skipped")
+                            continue
+                        seen_refs.add(ref)
+                        node = block_map.get(ref)
+                        if node:
+                            row_cols.append([node.uid])
+                            row_sizes.append(span)
+                        else:
+                            warnings.append(f"layout ref '{ref}' not found")
+                if row_cols:
+                    rows[row_id] = row_cols
+                    sizes[row_id] = row_sizes
+            root.step_params = {"gridSettings": {"grid": {"rows": rows, "sizes": sizes}}}
+        else:
+            # Auto-stack vertically
+            rows, sizes = {}, {}
+            for node in block_nodes:
+                row_id = uid()
+                rows[row_id] = [[node.uid]]
+                sizes[row_id] = [24]
+            root.step_params = {"gridSettings": {"grid": {"rows": rows, "sizes": sizes}}}
+
+        if warnings:
+            meta["warnings"] = warnings
+        meta["node_count"] = root.count_nodes()
+        return root, meta
+
+    def _build_block(self, btype: str, bdef: dict, sort: int,
+                     meta: dict, warnings: list) -> TreeNode:
+        """Build a single block TreeNode from a block definition.
+
+        Validates collection existence for collection-based blocks.
         """
-        raw = json.dumps(template)
-        # Replace collection placeholder
-        raw = raw.replace('"__COLLECTION__"', f'"{target_collection}"')
+        # Validate collection exists for collection-based block types
+        coll_types = {"table", "filter", "form", "detail", "kpi"}
+        if btype in coll_types:
+            coll = bdef.get("collection", "")
+            if coll and not self._valid_collection(coll):
+                warnings.append(f"collection '{coll}' has no registered fields")
 
-        # Replace field references
-        if field_map:
-            for old_field, new_field in field_map.items():
-                raw = raw.replace(f'"{old_field}"', f'"{new_field}"')
+        if btype == "table":
+            coll = bdef["collection"]
+            fields = bdef.get("fields", [])
+            return self.table_block(
+                coll, fields,
+                first_click=bdef.get("first_click", True),
+                title=bdef.get("title"),
+                sort=sort,
+                link_actions=bdef.get("link_actions"),
+                js_columns=bdef.get("js_columns"),
+            )
 
-        result = json.loads(raw)
+        elif btype == "filter":
+            coll = bdef["collection"]
+            fields = bdef.get("fields", [])
+            # Filter out invalid fields
+            fields = self._filter_fields(coll, fields)
+            if not fields:
+                fields = ["name"]
+            return self.filter_form(
+                coll, fields,
+                target_uid=None,  # resolved later via block_map
+                sort=sort,
+            )
 
-        # Generate fresh UIDs for all nodes
-        uid_map = {}
+        elif btype == "form":
+            coll = bdef["collection"]
+            return self.form_block(
+                coll, bdef.get("fields", ""),
+                mode=bdef.get("mode", "create"),
+                title=bdef.get("title"),
+                required=set(bdef.get("required", [])),
+                props=bdef.get("props"),
+                sort=sort,
+            )
 
-        def _regen_uids(node):
-            if isinstance(node, dict):
-                if "uid" in node:
-                    old = node["uid"]
-                    if old not in uid_map:
-                        uid_map[old] = uid()
-                    node["uid"] = uid_map[old]
-                if "parentId" in node and node["parentId"] in uid_map:
-                    node["parentId"] = uid_map[node["parentId"]]
-                for v in node.values():
-                    _regen_uids(v)
-            elif isinstance(node, list):
-                for item in node:
-                    _regen_uids(item)
+        elif btype == "detail":
+            coll = bdef["collection"]
+            return self.detail_block(
+                coll, bdef.get("fields", ""),
+                title=bdef.get("title"),
+                sort=sort,
+            )
 
-        _regen_uids(result)
+        elif btype == "js":
+            return self.js_block_node(
+                bdef.get("title", "JS Block"),
+                bdef.get("code", ""),
+                sort=sort,
+            )
 
-        # Clean template metadata
-        result.pop("_template_name", None)
-        result.pop("_source_collection", None)
+        elif btype == "kpi":
+            return self.kpi_block(
+                bdef.get("title", "Count"),
+                bdef["collection"],
+                filter_=bdef.get("filter"),
+                color=bdef.get("color"),
+                sort=sort,
+            )
 
-        return result
+        elif btype == "outline":
+            return self.outline_node(
+                bdef.get("title", "Outline"),
+                bdef.get("ctx_info", {}),
+                sort=sort,
+            )
+
+        else:
+            raise ValueError(f"unknown block type: '{btype}'")
+

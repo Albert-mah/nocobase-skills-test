@@ -1,0 +1,1 @@
+const r=ctx.record||{};const h=ctx.React.createElement;ctx.render(h('div',null,h('div',{style:{fontWeight:500,fontSize:13,lineHeight:'20px',color:'#1890ff'}},r.{TITLE}||'-'),h('div',{style:{color:'#8c8c8c',fontSize:12,marginTop:2}},[{SUBS}].map(f=>r[f]).filter(Boolean).join(' · ')||'')));

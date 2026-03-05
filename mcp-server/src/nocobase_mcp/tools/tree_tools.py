@@ -1,150 +1,188 @@
-"""Tree-based page tools — get/save full FlowModel trees, template extract/apply.
+"""Tree-based page tools — compose pages from free-form block definitions.
 
 These tools complement the tree_builder module by exposing tree operations
 as MCP tools for AI agents.
 """
 
 import json
+import os
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 from ..client import get_nb_client
 from ..tree_builder import TreeBuilder
-from ..utils import safe_json
+from ..utils import safe_json, resolve_file
 
 
 def register_tools(mcp: FastMCP):
     """Register tree-based page tools on the MCP server."""
 
     @mcp.tool()
-    def nb_get_tree(parent_uid: str, sub_key: str = "grid") -> str:
-        """Get the complete FlowModel tree under a parent node (with nested subModels).
+    def nb_compose_page(tab_uid: str, blocks_json: str,
+                        layout_json: Optional[str] = None) -> str:
+        """Build a page from free-form block definitions — any blocks, any layout.
 
-        Returns the full page tree as JSON — useful for inspecting page structure,
-        extracting templates, or debugging layout issues.
-
-        Args:
-            parent_uid: UID of the parent FlowModel (e.g. tab UID)
-            sub_key: Sub key to query (default "grid")
-
-        Returns:
-            JSON with the complete tree structure including all nested subModels.
-
-        Example:
-            nb_get_tree("tab_uid_abc123")
-        """
-        nb = get_nb_client()
-        tree = nb.get_tree(parent_uid, sub_key)
-        if tree is None:
-            return json.dumps({"error": f"No tree found under {parent_uid} with subKey={sub_key}"})
-        return json.dumps(tree, ensure_ascii=False)
-
-    @mcp.tool()
-    def nb_page_tree(tab_uid: str, tree_json: str) -> str:
-        """Save a complete FlowModel page tree in one API call.
-
-        Cleans existing content under the tab first, then submits the entire
-        tree structure via flowModels:save with nested subModels.
+        Unlike nb_crud_page which forces a KPI+Filter+Table+Form pattern,
+        compose_page lets you freely combine any blocks in any layout.
 
         Args:
             tab_uid: Tab UID (from nb_create_page or nb_create_menu)
-            tree_json: Complete tree JSON string. Must be a valid FlowModel tree
-                      with uid, use, stepParams, and optionally subModels.
+            blocks_json: JSON array of block definitions. Each block:
+                - id:   label for layout reference (default "block_0", etc.)
+                - type: "table" | "filter" | "form" | "detail" | "js" | "kpi" | "outline"
+                Block-specific fields:
+                  table:   collection, fields (list), title?, first_click? (default true),
+                           addnew_fields? (DSL str), edit_fields? (DSL str),
+                           detail_tabs? (list of tab defs),
+                           js_columns? — DSL format (preferred):
+                             [{"type":"composite","title":"客户","field":"name","subs":["city","source"]},
+                              {"type":"currency","title":"金额","field":"amount","threshold":100000},
+                              {"type":"countdown","title":"到期","field":"end_date"},
+                              {"type":"progress","title":"概率","field":"probability"},
+                              {"type":"relative_time","title":"最近","field":"createdAt"},
+                              {"type":"stars","title":"评分","field":"satisfaction"},
+                              {"type":"comparison","title":"达成","target":"target_amount","actual":"actual_amount"}]
+                             Legacy format also supported: {"title":"...","code":"raw JS","width":120}
+                  filter:  collection, fields (list), target (block id to filter)
+                  form:    collection, fields (DSL str), mode ("create"|"edit"),
+                           title?, required? (list)
+                  detail:  collection, fields (DSL str), title?
+                  js:      title, code
+                  kpi:     title, collection, filter?, color?
+                  outline: title, ctx_info (dict)
+            layout_json: Optional JSON layout — rows of [ref, span] pairs.
+                ref = block_id (str) or [id_a, id_b, ...] (stacked column).
+                Span uses Ant 24-grid. Omit for auto-stack full-width.
+                Column stacking example: [["tbl",16],[["sidebar_a","sidebar_b"],8]]
+                puts tbl left (16 wide) and sidebar_a/b stacked right (8 wide).
 
         Returns:
-            JSON with save result and node count.
+            JSON with block UIDs, form UIDs, node count, and any warnings.
 
-        Example:
-            nb_page_tree("tab123", '{"uid":"abc","use":"BlockGridModel","stepParams":{},"subModels":{...}}')
+        Example — dashboard + table with sidebar:
+            blocks = [
+                {"id":"chart","type":"js","title":"Industry Distribution","code":"..."},
+                {"id":"search","type":"filter","collection":"nb_crm_customers",
+                 "fields":["name","status"],"target":"tbl"},
+                {"id":"tbl","type":"table","collection":"nb_crm_customers",
+                 "fields":["name","status","phone","createdAt"],
+                 "addnew_fields":"name*|code\\nstatus|industry",
+                 "detail_tabs":[{"title":"Info","fields":"name|code\\nstatus"}]}
+            ]
+            layout = [[["search",24]],[["chart",8],["tbl",16]]]
+
+        Example — simple form page:
+            blocks = [
+                {"id":"form","type":"form","collection":"nb_crm_feedback",
+                 "fields":"--- Customer\\ncustomer*\\n--- Feedback\\ncontent*\\nrating",
+                 "mode":"create","title":"Submit Feedback","required":["customer","content"]}
+            ]
         """
         nb = get_nb_client()
-        tree_data = safe_json(tree_json)
-        if not isinstance(tree_data, dict):
-            return json.dumps({"error": "tree_json must be a JSON object"})
+        blocks = safe_json(blocks_json)
+        if not isinstance(blocks, list):
+            return json.dumps({"error": "blocks_json must be a JSON array"})
+        if not blocks:
+            return json.dumps({"error": "blocks list is empty"})
+
+        layout = None
+        if layout_json:
+            layout = safe_json(layout_json)
+            if not isinstance(layout, list):
+                return json.dumps({"error": "layout_json must be a JSON array of rows"})
 
         # Clean existing content
-        count = nb.clean_tab(tab_uid)
+        nb.clean_tab(tab_uid)
 
-        # Flatten and save each node individually (preserves subType)
-        result = nb.save_tree_dict(tree_data, tab_uid)
-        return json.dumps({
-            "status": "ok",
-            "cleaned_nodes": count,
-            "root_uid": tree_data.get("uid", "?"),
-            "saved": result["saved"],
-            "total": result["total"],
-            **({"errors": result["errors"]} if result["errors"] else {}),
-        })
+        # Build tree in memory
+        tb = TreeBuilder(nb)
+        try:
+            root, meta = tb.compose_page(tab_uid, blocks, layout)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
 
-    @mcp.tool()
-    def nb_extract_template(tab_uid: str, collection: str, name: str) -> str:
-        """Extract a reusable page template from an existing page.
+        # Save all nodes
+        filter_manager = meta.pop("_filter_manager", None)
+        nb.save_tree(root, tab_uid, filter_manager=filter_manager)
 
-        Gets the full page tree, then parameterizes it by replacing collection
-        names and UIDs with placeholders.
-
-        Args:
-            tab_uid: Tab UID of the source page
-            collection: Collection name used in the page (will become __COLLECTION__)
-            name: Template name for identification
-
-        Returns:
-            JSON template that can be applied to other collections via nb_apply_template.
-
-        Example:
-            nb_extract_template("tab123", "nb_crm_customers", "crm_crud_template")
-        """
-        nb = get_nb_client()
-        tree = nb.get_tree(tab_uid)
-        if tree is None:
-            return json.dumps({"error": f"No tree found under tab {tab_uid}"})
-
-        template = TreeBuilder.extract_template(tree, collection, name)
-        return json.dumps(template, ensure_ascii=False)
+        # Build result
+        result = {k: v for k, v in meta.items() if not k.startswith("_")}
+        if nb.warnings:
+            result.setdefault("warnings", []).extend(nb.warnings)
+        return json.dumps(result, ensure_ascii=False)
 
     @mcp.tool()
-    def nb_apply_template(
-        tab_uid: str,
-        template_json: str,
-        collection: str,
-        field_map: Optional[dict] = None,
-    ) -> str:
-        """Apply a page template to create a new page for a different collection.
+    def nb_compose_page_file(file_path: str) -> str:
+        """Build multiple pages from a JSON file using free-form block composition.
 
-        Takes a template (from nb_extract_template) and instantiates it with
-        a new collection name and optional field name mapping.
+        Write a JSON file with an array of page definitions, then call this tool.
+        Each page uses the same format as nb_compose_page.
 
         Args:
-            tab_uid: Tab UID for the new page
-            template_json: Template JSON (from nb_extract_template)
-            collection: Target collection name
-            field_map: Optional dict mapping source field names to target field names.
-                      Example: {"customer_name": "supplier_name", "industry": "category"}
+            file_path: Path to a JSON file containing an array of page definitions.
+                Each item: {
+                    "tab_uid": "...",
+                    "blocks": [...],     // same as nb_compose_page blocks_json
+                    "layout": [...]      // optional, same as nb_compose_page layout_json
+                }
 
         Returns:
-            JSON with save result.
+            JSON with results for each page.
 
-        Example:
-            nb_apply_template("newtab123", '<template_json>', "nb_crm_suppliers",
-                field_map={"customer_name": "supplier_name"})
+        Example file content:
+            [
+              {
+                "tab_uid": "abc123",
+                "blocks": [
+                  {"id":"tbl","type":"table","collection":"customers",
+                   "fields":["name","status"],"addnew_fields":"name*\\nstatus"},
+                  {"id":"search","type":"filter","collection":"customers",
+                   "fields":["name"],"target":"tbl"}
+                ],
+                "layout": [[["search",24]],[["tbl",24]]]
+              }
+            ]
         """
-        nb = get_nb_client()
-        template = safe_json(template_json)
-        if not isinstance(template, dict):
-            return json.dumps({"error": "template_json must be a JSON object"})
+        try:
+            file_path = resolve_file(file_path)
+        except FileNotFoundError as e:
+            return json.dumps({"error": str(e)})
 
-        fm = safe_json(field_map) if field_map else None
-        tree_data = TreeBuilder.apply_template(template, collection, fm)
+        with open(file_path, "r", encoding="utf-8") as f:
+            try:
+                pages = json.load(f)
+            except json.JSONDecodeError as e:
+                return json.dumps({"error": f"Invalid JSON: {e}"})
 
-        # Clean and save each node individually (preserves subType)
-        count = nb.clean_tab(tab_uid)
-        result = nb.save_tree_dict(tree_data, tab_uid)
+        if not isinstance(pages, list):
+            return json.dumps({"error": "File must contain a JSON array"})
+
+        results = []
+        for i, page in enumerate(pages):
+            try:
+                tab = page.get("tab_uid", "")
+                blocks = page.get("blocks", [])
+                if not tab or not blocks:
+                    results.append({"index": i, "error": "Missing tab_uid or blocks"})
+                    continue
+
+                layout_str = json.dumps(page["layout"]) if page.get("layout") else None
+                r = nb_compose_page(
+                    tab_uid=tab,
+                    blocks_json=json.dumps(blocks),
+                    layout_json=layout_str,
+                )
+                parsed = json.loads(r)
+                parsed["index"] = i
+                results.append(parsed)
+            except Exception as e:
+                results.append({"index": i, "error": str(e)})
+
+        built = len([r for r in results if "error" not in r])
+        failed = len([r for r in results if "error" in r])
         return json.dumps({
-            "status": "ok",
-            "cleaned_nodes": count,
-            "collection": collection,
-            "root_uid": tree_data.get("uid", "?"),
-            "saved": result["saved"],
-            **({"errors": result["errors"]} if result["errors"] else {}),
+            "pages_built": built,
+            "pages_failed": failed,
+            "results": results,
         })
