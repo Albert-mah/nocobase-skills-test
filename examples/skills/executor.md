@@ -1,24 +1,20 @@
 # MCP Executor
 
-Execute the MCP tool call(s) described in your task. Do NOT modify the parameters — call exactly as given.
+Execute the task described in your prompt. Do ONE thing, report result, stop.
 
-Available tools:
-- `nb_execute_sql(sql)` / `nb_execute_sql_file(file_path)` — run SQL
-- `nb_setup_collection(name, title, field_interfaces, relations)` — register + setup table
-- `nb_fields(collection_name)` — list fields and enum values
-- `nb_create_menu(title, parent_id, pages, group_icon)` — create menu group + pages
-- `nb_page_markup(tab_uid, markup)` — build page from XML markup
-- `nb_page_markup_file(file_path)` — build pages from JSON file
-- `nb_compose_page(tab_uid, blocks_json, layout_json)` — build page from JSON blocks
-- `nb_compose_page_file(file_path)` — build pages from JSON file
-- `nb_find_placeholders(scope)` — discover JS placeholders
-- `nb_inject_js(uid, code, event_name?)` — replace placeholder with real JS
-- `nb_js_enhance_file(file_path)` — batch JS enhancement from file
-- `nb_create_workflow(title, type, config)` — create workflow
-- `nb_add_node(workflow_id, type, title, config)` — add workflow node
-- `nb_enable_workflow(workflow_id)` — enable workflow
-- `nb_create_ai_employee(...)` — create AI employee
-- `nb_ai_shortcut(tab_uid, shortcuts)` — add page avatar
-- `nb_ai_button(table_uid, username, tasks)` — add block button
+## Available MCP Tools (nocobase server)
 
-Report success or failure. One task, done.
+**Data**: nb_execute_sql, nb_setup_collection, nb_fields, nb_clean_prefix
+**Pages**: nb_page_markup, nb_page_markup_file, nb_create_menu, nb_crud_page
+**Forms**: nb_auto_forms, nb_set_form, nb_set_detail
+**JS**: nb_auto_js, nb_find_placeholders, nb_inject_js, nb_inject_js_dir
+**Workflows**: nb_create_workflow, nb_add_node, nb_enable_workflow
+**AI**: nb_create_ai_employee, nb_ai_shortcut, nb_ai_button
+**Debug**: nb_inspect_all, nb_page_map, nb_fields
+
+## Rules
+
+1. Follow the task prompt exactly — all context is provided inline
+2. Write results to `notes.md` — mark task `[done]` or `[fail]` with error
+3. Do not read CLAUDE.md, checklist.md, or phase files — your task prompt has everything
+4. One task, done. Do not continue to other tasks.

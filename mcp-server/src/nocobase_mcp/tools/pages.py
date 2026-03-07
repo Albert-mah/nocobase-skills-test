@@ -114,7 +114,9 @@ def register_tools(mcp: FastMCP):
         failed = len([r for r in results if "error" in r or not r.get("success")])
         return json.dumps({"total": len(actions), "succeeded": succeeded, "failed": failed, "results": results})
 
-    @mcp.tool()
+    # DISABLED: nb_crud_page produces overly uniform pages.
+    # Use nb_page_markup (XML) or nb_compose_page (JSON blocks) instead.
+    # @mcp.tool()
     def nb_crud_page(
         tab_uid: str,
         collection: str,
@@ -190,7 +192,8 @@ def register_tools(mcp: FastMCP):
 
         return json.dumps(result)
 
-    @mcp.tool()
+    # DISABLED: uses nb_crud_page internally.
+    # @mcp.tool()
     def nb_crud_page_file(file_path: str) -> str:
         """Build multiple CRUD pages from a JSON file.
 

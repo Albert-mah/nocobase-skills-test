@@ -42,12 +42,8 @@ This is the critical link: requirements pattern → which layout → which JS pl
     <js-col type="composite" field="{PRIMARY_FIELD}" subs="{SUBS}" title="{COL_TITLE}">
       {COL_DESC}
     </js-col>
-    <addnew fields="{FORM_FIELDS}" />
-    <edit fields="{FORM_FIELDS}" />
-    <detail>
-      <tab title="详情" fields="{DETAIL_FIELDS}" />
-    </detail>
   </table>
+  <!-- Forms (addnew/edit/detail) auto-generate with all fields. Refine in Phase 3B. -->
 </page>
 ```
 
@@ -61,8 +57,6 @@ This is the critical link: requirements pattern → which layout → which JS pl
       <js-col type="composite" field="{PRIMARY_FIELD}" subs="{SUBS}" title="{COL_TITLE}">
         {COL_DESC}
       </js-col>
-      <addnew fields="{FORM_FIELDS}" />
-      <edit fields="{FORM_FIELDS}" />
     </table>
     <stack span="8">
       <js-block title="{SIDEBAR_A_TITLE}">{SIDEBAR_A_DESC}</js-block>
@@ -87,8 +81,6 @@ This is the critical link: requirements pattern → which layout → which JS pl
     <js-col type="currency" field="{AMOUNT_FIELD}" title="金额" threshold="{THRESHOLD}">
       ¥格式显示，超过阈值红色高亮
     </js-col>
-    <addnew fields="{FORM_FIELDS}" />
-    <edit fields="{FORM_FIELDS}" />
   </table>
 </page>
 ```
@@ -107,8 +99,6 @@ This is the critical link: requirements pattern → which layout → which JS pl
     <js-col type="composite" field="{PRIMARY_FIELD}" subs="{SUBS}" title="{COL_TITLE}">
       {COL_DESC}
     </js-col>
-    <addnew fields="{FORM_FIELDS}" />
-    <edit fields="{FORM_FIELDS}" />
   </table>
 </page>
 ```
@@ -118,10 +108,7 @@ This is the critical link: requirements pattern → which layout → which JS pl
 ```xml
 <page collection="{COLLECTION}">
   <filter fields="{FILTER_FIELDS}" target="tbl" />
-  <table id="tbl" fields="{TABLE_FIELDS}">
-    <addnew fields="{FORM_FIELDS}" />
-    <edit fields="{FORM_FIELDS}" />
-  </table>
+  <table id="tbl" fields="{TABLE_FIELDS}" />
 </page>
 ```
 
@@ -140,8 +127,6 @@ No JS blocks needed. For Pattern E, you can also use `nb_crud_page` shortcut.
     <js-col type="progress" field="{PROGRESS_FIELD}" title="达成率">
       彩色进度条+百分比
     </js-col>
-    <addnew fields="{FORM_FIELDS}" />
-    <edit fields="{FORM_FIELDS}" />
   </table>
 </page>
 ```
@@ -174,7 +159,7 @@ Look at the HTML prototypes — every entity's first column shows **bold title +
 | Plain text | **SKIP** — NocoBase native | ✓ |
 | Relation name | **SKIP** — NocoBase native | ✓ |
 
-### Example — CRM 合同 table:
+### Example — 合同 table:
 
 ```xml
 <table id="tbl" fields="title,customer_id,status,amount,end_date,createdAt">
@@ -187,11 +172,10 @@ Look at the HTML prototypes — every entity's first column shows **bold title +
   <js-col type="countdown" field="end_date" title="到期">
     还剩N天/已逾期N天
   </js-col>
-  <addnew fields="title*|customer_id\namount|status\nstart_date|end_date" />
-  <edit fields="title*|customer_id\namount|status\nstart_date|end_date" />
 </table>
 ```
 Note: `status` → select field → SKIP. `customer_id` → relation → SKIP.
+**Forms (addnew/edit/detail) are auto-generated** — do NOT write them in XML. Refine in Phase 3B.
 
 ## Placeholders Reference
 
@@ -200,7 +184,5 @@ Note: `status` → select field → SKIP. `customer_id` → relation → SKIP.
 | `{COLLECTION}` | Collection name | `nb_crm_customers` |
 | `{TABLE_FIELDS}` | Comma-separated column names | `name,status,createdAt` |
 | `{FILTER_FIELDS}` | Comma-separated searchable fields | `name,status` |
-| `{FORM_FIELDS}` | DSL string for add/edit forms | `name*\nstatus\nremark` |
-| `{DETAIL_FIELDS}` | DSL string for detail tab | `name\|status\namount` |
 | `{PRIMARY_FIELD}` | Main name/title field | `name` |
 | `{SUBS}` | Sub-fields for composite | `city,source` |

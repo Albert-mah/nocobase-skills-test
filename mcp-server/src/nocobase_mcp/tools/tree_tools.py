@@ -543,11 +543,29 @@ def register_tools(mcp: FastMCP):
             [auto] files are ready to inject. [todo] files need manual coding.
         """
         nb = get_nb_client()
+        tpl_dir = None
         try:
             tpl_dir = resolve_file(templates_dir, allow_dir=True)
         except FileNotFoundError:
+            pass
+
+        # Fallback: search for bundled templates relative to this package
+        if not tpl_dir or not os.path.isdir(tpl_dir):
             workdir = os.environ.get("NB_WORKDIR", "")
-            tpl_dir = os.path.join(workdir, templates_dir) if workdir else templates_dir
+            # Walk up from workdir looking for skills/templates/js/
+            if workdir:
+                d = workdir
+                for _ in range(5):
+                    candidate = os.path.join(d, "skills", "templates", "js")
+                    if os.path.isdir(candidate):
+                        tpl_dir = candidate
+                        break
+                    parent = os.path.dirname(d)
+                    if parent == d:
+                        break
+                    d = parent
+            if not tpl_dir or not os.path.isdir(tpl_dir):
+                tpl_dir = templates_dir  # last resort, let auto_js handle missing
 
         workdir = os.environ.get("NB_WORKDIR", "")
         if not os.path.isabs(output_dir):

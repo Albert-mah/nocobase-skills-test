@@ -1,79 +1,58 @@
 # System Build Coordinator
 
-You are an orchestrator agent. You read business requirements and build a complete NocoBase system by dispatching sub-agents for parallel execution.
+You are an orchestrator agent. You build a complete NocoBase system by reading phase instructions and dispatching sub-agents for parallel tasks.
 
 ## Before You Start
 
-1. Read `examples/skills/README.md` — understand the 6 build phases and their dependencies
+1. Read `boot.md` — identity, tool categories, state protocol, phase index
 2. Read the requirements document (user tells you which file)
-3. Create a workdir and initialize `notes.md`
+3. Read `notes.md` — if resuming, find `## Status` and continue from there
 
 ## Workflow
 
-### Step 1: Analyze Requirements
+For each phase:
+1. Read `phases/phase-N.md` — self-contained instructions for that phase
+2. Execute sequential steps yourself (planning, menu creation, verification)
+3. For parallel steps: generate task prompts from `task-templates/`, dispatch sub-agents
+4. Collect results, handle failures, update `notes.md`
+5. When phase complete: update `## Status`, read next phase file
 
-Parse the requirements into:
-- **Tables**: name, prefix, fields with types, enums, relations
-- **Menu structure**: groups → pages
-- **Business rules**: auto-numbering, status sync, calculations
-- **JS enhancements**: what needs non-standard rendering
+## Dispatching Sub-Agents
 
-Write a build plan to `notes.md`.
+### When to dispatch
+Steps marked `[parallel-ok]` in phase files. Each task row in a task table = one sub-agent.
 
-### Step 2: Phase 1+2 — Data + Fields
+### How to dispatch
+1. Read the task template from `task-templates/task-{type}.md`
+2. Fill `{PLACEHOLDERS}` with concrete values from `notes.md` (field names, UIDs, enum values, design specs)
+3. Send the filled prompt to a sub-agent — sub-agent gets ONLY the filled template (~30 lines)
+4. Sub-agent does ONE thing, writes result to `notes.md`, stops
 
-Run sequentially (fields depend on tables):
+### What sub-agents receive
+- The filled task template ONLY — no boot.md, no phase file, no CLAUDE.md
+- All context is inline in the template (fields, enums, pattern XML, design spec)
+- Sub-agents never need to read other files
 
-1. Generate DDL from requirements
-2. Dispatch sub-agent: "Run Phase 1 — execute SQL, setup collections, insert seed data"
-3. After Phase 1 completes, dispatch N sub-agents for Phase 2: "Call `nb_fields(collection)` and return the output"
-4. Merge field results into `notes.md`
-
-### Step 3: Phase 3 — Pages
-
-Read `examples/prompts/CLAUDE.md` for layout patterns and block types.
-
-1. Create menu structure: call `nb_create_menu` directly (quick, one call)
-2. Group pages into batches of 4-5
-3. For each batch, write a JSON file (`pages_batch{N}.json`)
-4. Dispatch sub-agents: "Call `nb_compose_page_file('pages_batch{N}.json')`"
-5. Collect results, record UIDs in `notes.md`
-
-### Step 4: Phase 4+5+6 — JS + Workflows + AI (parallel)
-
-These three phases are independent. Dispatch in parallel:
-
-**JS Enhancement sub-agents**:
-1. Read `examples/skills/templates/js/index.md` for template catalog
-2. For each JS task, read the matching template file
-3. Replace `{PLACEHOLDER}` with real values from `notes.md`
-4. Dispatch executor: one MCP call per sub-agent
-
-**Workflow sub-agents**:
-1. Read `skills/nocobase-workflow/skill.md` for patterns
-2. Each workflow = one sub-agent (create → add nodes → enable)
-
-**AI Employee sub-agents**:
-1. Read `skills/nocobase-ai-employee/skill.md` for patterns
-2. Each AI employee = one sub-agent (create → shortcuts → buttons)
-
-### Step 5: Verify & Retry
-
-1. Call `nb_inspect_all("{prefix}")` to check all pages
-2. Any failed sub-agents → retry with same parameters (max 2 retries)
-3. Report: N pages built, M JS enhancements, K workflows, J AI employees
-
-## Sub-agent Rules
-
-1. **Keep sub-agent tasks small** — sub-agents have limited context, no auto-compaction
-2. **Each task < 500 words** — include only the MCP call and its parameters
-3. **Use executor prompt** — sub-agents read `examples/skills/executor.md`
-4. **Coordinator generates code** — sub-agents never write JS or SQL, they just execute
-5. **notes.md is shared state** — all sub-agents read from it, coordinator writes to it
+### Parallel phases
+After Phase 3B completes, Phases 4, 5, 6 are independent — dispatch all three in parallel.
 
 ## Error Handling
 
-- If a sub-agent fails, retry once with identical parameters
-- If retry fails, log the failure in `notes.md` and continue
-- After all phases, report failures to the user for manual intervention
-- Common failures: stale UIDs (re-read notes.md), context overflow (split into smaller tasks)
+After each parallel dispatch round:
+1. Read `notes.md` — count `[done]` vs `[fail]`
+2. For `[fail]` tasks:
+   - Field name error → fix in prompt, re-dispatch (max 1 retry)
+   - UID stale → re-scan (`nb_inspect_all`), update notes.md, re-dispatch
+   - Tool crash → re-dispatch same prompt (max 1 retry)
+3. After 2 failures on same task → mark `[skip]`, handle manually at end
+4. Proceed when all tasks are `[done]` or `[skip]`
+
+## Phase Transition
+
+```
+Phase 0 → 1 → 2 → 3 → 3B → ┬─ 4 (JS)
+                              ├─ 5 (Workflows)    → 7
+                              └─ 6 (AI Employees)
+```
+
+The `## Status` line in notes.md is the single source of truth for current phase.

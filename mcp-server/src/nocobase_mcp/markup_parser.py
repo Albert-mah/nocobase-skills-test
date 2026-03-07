@@ -269,6 +269,17 @@ class PageMarkupParser:
                         popup_cp = self.tb.detail_popup(coll, tabs)
                         click_field.add_child("page", "object", popup_cp)
 
+            # Auto-generate composite column if missing
+            has_composite = any(
+                child.tag == "js-col" and child.get("type") == "composite"
+                for child in el
+            )
+            if not has_composite and coll:
+                auto_composite = self._auto_composite_col(coll, js_col_sort)
+                if auto_composite:
+                    node.add_child("columns", "array", auto_composite)
+                    js_col_sort += 1
+
             # Auto-generate missing forms with all editable fields
             if coll and (not has_addnew or not has_edit or not has_detail):
                 editable = self._get_editable_fields(coll)
@@ -509,6 +520,76 @@ class PageMarkupParser:
             else:
                 lines.append(fields[i])
         return "\n".join(lines)
+
+    def _auto_composite_col(self, coll: str, sort: int) -> TreeNode | None:
+        """Auto-generate a composite column for the table's primary text field.
+
+        Picks the first string/input field as title, then up to 2 short fields
+        (select, string, date) as subtitles. Returns None for collections with
+        fewer than 3 non-system fields (reference/config tables).
+        """
+        self.nb._load_meta(coll)
+        schema = self.nb._field_cache.get(coll, {})
+        SKIP = {"id", "createdAt", "updatedAt", "createdById", "updatedById",
+                "createdBy", "updatedBy", "sort"}
+        SKIP_IFACE = {"o2m", "m2m", "oho", "obo", "createdBy", "updatedBy",
+                       "createdAt", "updatedAt"}
+
+        fields = [(n, info) for n, info in schema.items()
+                  if n not in SKIP and not n.startswith("f_") and not n.endswith("Id")
+                  and info.get("interface") not in SKIP_IFACE]
+
+        if len(fields) < 3:
+            return None  # Too few fields — reference/config table
+
+        # Find primary field (first string/input)
+        primary = None
+        for n, info in fields:
+            iface = info.get("interface", "")
+            if iface in ("input", "string", "") and n in ("name", "title", "subject"):
+                primary = n
+                break
+        if not primary:
+            for n, info in fields:
+                iface = info.get("interface", "")
+                if iface in ("input", "string", ""):
+                    primary = n
+                    break
+        if not primary:
+            return None
+
+        # Find subtitle fields — prefer select (categorical) over plain text
+        subs = []
+        # Pass 1: select fields first (best for "状态·行业" style subtitles)
+        for n, info in fields:
+            if n == primary:
+                continue
+            if info.get("interface") == "select":
+                subs.append(n)
+            if len(subs) >= 2:
+                break
+        # Pass 2: fill with short string/date if needed
+        if len(subs) < 2:
+            for n, info in fields:
+                if n == primary or n in subs:
+                    continue
+                iface = info.get("interface", "")
+                if iface in ("input", "string", "date", "datetime", ""):
+                    subs.append(n)
+                if len(subs) >= 2:
+                    break
+
+        if not subs:
+            return None
+
+        # Short name for title from collection
+        short_name = coll.rsplit("_", 1)[-1] if "_" in coll else coll
+        title = short_name.capitalize()
+
+        desc = f"蓝色粗体{primary}，下方灰色显示 {'·'.join(subs)}"
+        return self.tb.placeholder_js_col(
+            title, primary, desc, col_type="composite",
+            meta={"subs": ",".join(subs)}, sort=sort, width=200)
 
     @staticmethod
     def _parse_kpi_filter(filter_str: str) -> dict | None:

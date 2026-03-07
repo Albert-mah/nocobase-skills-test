@@ -1,121 +1,106 @@
 # NocoBase Builder — Agent Skill Base
 
-Build a complete NocoBase system from any requirements document. Follow the checklist step-by-step.
+Build a complete NocoBase system from any requirements document.
 
 ## Quick Start
 
 ```
-1. Read this file                    ← you are here
-2. Read requirements (the -requirements.md version, NOT .txt)
-3. Read checklist.md                 ← step-by-step with checkboxes
-4. Execute each step, mark progress in notes.md
+1. Read boot.md                     ← identity + state protocol + phase index
+2. Read requirements (*-requirements.md)
+3. Read phases/phase-0-init.md      ← first phase instructions
+4. Execute, write progress to notes.md, read next phase when done
 ```
 
-## Architecture
+## Architecture: Three Layers
+
+```
+Layer 1: boot.md (~45 lines)              ← always loaded
+Layer 2: phases/phase-N.md (~80-120 lines) ← one per phase, load on demand
+Layer 3: task-templates/ (~25-30 lines)    ← sub-agent prompts, dynamically filled
+```
+
+**Why**: A sub-agent building one page needs ~30 lines of context, not 900. Each layer loads only what's needed for the current task.
+
+### File Structure
 
 ```
 examples/skills/
-├── README.md          ← Entry point (this file)
-├── checklist.md       ← Executable checklist — the core
-├── coordinator.md     ← Multi-agent coordination patterns (optional)
-├── executor.md        ← Minimal sub-agent prompt (optional)
-├── knowledge/         ← Skill docs — read on demand per step
-│   ├── data-modeling.md      → nb_setup_collection etc.
-│   ├── page-building.md      → nb_page_markup, nb_compose_page etc.
-│   ├── js-sandbox.md         → ctx API, antd components
-│   ├── workflows.md          → nb_create_workflow etc.
-│   └── ai-employees.md       → nb_create_ai_employee etc.
-└── templates/         ← Code templates — read & fill on demand
-    ├── js/index.md           → 12 JS column/sidebar/event templates
-    ├── pages/index.md        → 5 page layout patterns
-    └── workflows/index.md    → 4 workflow templates
+├── interactive.md         ← Interactive mode entry point (human + AI)
+├── boot.md                ← Automated mode entry point (phase-driven build)
+├── phases/                ← Layer 2: self-contained phase instructions
+│   ├── phase-0-init.md
+│   ├── phase-1-data.md
+│   ├── phase-2-fields.md
+│   ├── phase-3-pages.md        ← layout patterns + XML tag reference
+│   ├── phase-3b-forms.md       ← form DSL + detail JSON format
+│   ├── phase-4-js.md           ← JS sandbox + code rules + API reference
+│   ├── phase-5-workflows.md
+│   ├── phase-6-ai.md
+│   └── phase-7-verify.md
+├── task-templates/        ← Layer 3: sub-agent dispatch templates
+│   ├── task-page-build.md
+│   ├── task-form-refine.md
+│   ├── task-js-implement.md
+│   └── task-workflow.md
+├── knowledge/             ← deep reference, read on demand
+│   ├── nocobase-concepts.md  ← platform architecture & core concepts
+│   └── troubleshooting.md    ← debug common issues
+├── templates/             ← code templates, read on demand per phase
+│   ├── js/index.md
+│   ├── pages/index.md
+│   └── workflows/index.md
+└── notes.md               ← shared state across all agents
 ```
 
-## Two-Phase Build Workflow
+## Two Modes
 
-### Phase 1: XML Markup → Pages with Placeholders
-Write XML markup defining page structure. All JS nodes are description-only placeholders.
-```
-nb_page_markup(tab_uid, "<page collection=\"users\">...</page>")
-```
+### Interactive Mode (human + AI conversation)
+1. AI reads `interactive.md` → understands role as NocoBase expert
+2. AI reads `knowledge/nocobase-concepts.md` → understands the platform
+3. User gives instructions step by step, AI executes with MCP tools
+4. AI reads phase/template docs on demand when needed
+5. Best for: iterative refinement, learning, custom builds
 
-### Phase 2: Auto-generate JS → Implement Remaining → Deploy
-```
-nb_auto_js("CRM")             → auto-generates column JS files + stub files for blocks/items
-                                 returns task table: [auto] = ready, [todo] = needs manual work
-# Implement [todo] files manually (blocks, items, events)
-nb_inject_js_dir("js/")       → batch deploy all JS files
-```
+### Automated Mode (phase-driven build)
+1. AI reads `boot.md` → finds current phase in `notes.md` → reads that phase file
+2. Executes steps sequentially within each phase
+3. When phase completes, reads next phase file
+4. Best for: full system builds from requirements docs
 
-Column JS (composite, currency, countdown, progress, stars, relative_time) is auto-generated from templates.
-Blocks/items/events get stub files — implement manually or dispatch to sub-agents.
+### Single Agent (automated)
+1. Reads `boot.md` → finds current phase in `notes.md` → reads that phase file
+2. Executes steps sequentially within each phase
+3. When phase completes, reads next phase file
+4. Context: boot.md (~45 lines) + one phase file (~100 lines) = **~145 lines**
 
-## Requirements: Two Formats
-
-| Format | File | Use |
-|--------|------|-----|
-| **Rich requirements** | `*-requirements.md` | Primary input — has user personas, "用户关注", UX expectations, interaction design |
-| **Table list** | `*.txt` | Quick reference — just tables, fields, enums, relations |
-
-**Always use `-requirements.md`** as the primary input. The "用户关注" sections define what each page should look like beyond basic CRUD.
-
-## HTML Prototypes (Optional but Recommended)
-
-If available in workdir:
-- `*.html` — visual page prototypes (Tailwind CSS, realistic data)
-- `design-notes.md` — structured UX patterns summary
-
-These give agents concrete visual targets: status badges, charts, sidebars, auto-calc, color schemes.
-Generated via `examples/prompts/design-prompt.md` → Stage 1.
-
-## How Agents Use This
-
-### Single Agent (no cluster)
-1. Read `checklist.md`, execute sequentially
-2. Phase 3: Write XML markup for each page, call `nb_page_markup`
-3. Phase 4: `nb_find_placeholders` → implement each JS via `nb_inject_js`
-
-### Cluster Agent (with sub-agents)
-1. Read `checklist.md`, dispatch sub-agents where marked
-2. **Phase 4 (JS) is the key parallelization point** — dispatch one sub-agent per placeholder. Each sub-agent writes code, injects, and verifies independently.
-3. Phase 2 (fields), Phase 5 (workflows), Phase 6 (AI) also parallelize well
+### Cluster (Orchestrator + Sub-Agents)
+1. Orchestrator reads `boot.md` + current phase file
+2. Phase planning step generates task table in `notes.md`
+3. For each `[todo]` task, orchestrator fills a task template with concrete values
+4. Sub-agent receives only the filled template (~30 lines) — no boot.md, no phase file
+5. Sub-agent does ONE thing, writes result to `notes.md`, stops
+6. Orchestrator checks all tasks, handles `[fail]`, advances phase
 
 ### Resume After Interruption
-1. Read `notes.md` — find last completed step
-2. Continue from next unchecked step
-3. All state is in `notes.md`
+1. Read `notes.md` → find `## Status` → find first `[todo]` in task table
+2. Continue from there. Do not re-execute `[done]` tasks.
 
-## Workdir Convention
+## Phase Flow
 
 ```
-{workdir}/
-├── .mcp.json              # MCP server config (required)
-├── *-requirements.md      # Input: rich requirements (primary)
-├── *.txt                  # Input: table list (quick reference)
-├── *.html                 # Optional: HTML prototypes
-├── design-notes.md        # Optional: UX patterns from prototypes
-├── notes.md               # Progress tracker + shared state
-└── pages_batch{N}.json    # Intermediate: page markup definitions
+Phase 0 → 1 → 2 → 3 → 3B → ┬─ 4 (JS)
+                              ├─ 5 (Workflows)    → 7
+                              └─ 6 (AI Employees)
 ```
 
-## Template Library
+Phases 4, 5, 6 are independent and can run in parallel.
 
-| Category | Index | Count | Description |
-|----------|-------|-------|-------------|
-| JS Enhancement | `templates/js/index.md` | 22 | Blocks (4), sidebars (3), columns (7), items (3), events (5) |
-| Page Layouts | `templates/pages/index.md` | 5 | Layout patterns (KPI, sidebar, pipeline, simple, dashboard) |
-| Workflows | `templates/workflows/index.md` | 4 | Auto-number, status sync, default value, date reminder |
+## Requirements & Workdir
 
-## File Reference
-
-| File | When to Read |
-|------|-------------|
-| `checklist.md` | Always — your execution guide |
-| `knowledge/data-modeling.md` | Phase 1 |
-| `knowledge/page-building.md` | Phase 3 — tool reference |
-| `templates/pages/index.md` | **Phase 3 — layout patterns + placeholder mapping** |
-| `templates/js/index.md` | Phase 4 — JS templates for placeholder implementation |
-| `knowledge/js-sandbox.md` | Phase 4 |
-| `knowledge/workflows.md` | Phase 5 |
-| `knowledge/ai-employees.md` | Phase 6 |
-| `examples/prompts/design-prompt.md` | Pre-Phase 0 — generate HTML prototypes |
+| File | Purpose |
+|------|---------|
+| `*-requirements.md` | Primary input — user personas, "用户关注", UX expectations |
+| `*.txt` | Quick reference — tables, fields, enums, relations |
+| `*.html` | Optional — HTML prototypes for visual targets |
+| `design-notes.md` | Optional — UX patterns from prototypes |
+| `notes.md` | State: progress, task tables, UIDs, field names, enum values |

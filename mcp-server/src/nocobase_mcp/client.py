@@ -398,13 +398,23 @@ class NB:
         if coll in self._field_cache:
             return
         fields = self._get_json(f"api/collections/{coll}/fields:list?pageSize=200") or []
-        self._field_cache[coll] = {
-            f["name"]: {"interface": f.get("interface", "input"),
-                        "type": f.get("type", "string"),
-                        "target": f.get("target", ""),
-                        "title": f.get("uiSchema", {}).get("title", f["name"])}
-            for f in fields
-        }
+        cache = {}
+        for f in fields:
+            info = {
+                "interface": f.get("interface", "input"),
+                "type": f.get("type", "string"),
+                "target": f.get("target", ""),
+                "title": f.get("uiSchema", {}).get("title", f["name"]),
+            }
+            # Capture enum options for select fields
+            enums = f.get("uiSchema", {}).get("enum", [])
+            if enums:
+                info["enum"] = [
+                    {"value": e.get("value", ""), "label": e.get("label", "")}
+                    for e in enums if isinstance(e, dict)
+                ]
+            cache[f["name"]] = info
+        self._field_cache[coll] = cache
         if not self._title_cache:
             colls = self._get_json("api/collections:list?paginate=false") or []
             for c in colls:
@@ -1047,10 +1057,16 @@ class NB:
 
     def menu(self, group_title: str, parent_id: int, pages: list,
              *, group_icon: str = "appstoreoutlined") -> dict:
-        """Create a menu group with child pages. Returns dict {title: tab_uid}."""
+        """Create a menu group with child pages. Returns dict {group_id, title: tab_uid}."""
         gid = self.group(group_title, parent_id, icon=group_icon)
-        tabs = {}
-        for title, icon in pages:
+        tabs = {"group_id": gid}
+        for item in pages:
+            if isinstance(item, str):
+                title, icon = item, "fileoutlined"
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                title, icon = item[0], item[1]
+            else:
+                title, icon = str(item), "fileoutlined"
             _, _, tu = self.route(title, gid, icon=icon)
             tabs[title] = tu
         return tabs
@@ -1645,7 +1661,8 @@ class NB:
         for col in cols:
             fields = [m for m in all_models
                       if m.get("parentId") == col["uid"]
-                      and "DisplayField" in m.get("use", "")]
+                      and "FieldModel" in m.get("use", "")
+                      and "Display" in m.get("use", "")]
             for f in fields:
                 sp = f.get("stepParams", {})
                 cto = sp.get("displayFieldSettings", {}).get("clickToOpen", {})
@@ -2120,9 +2137,57 @@ class NB:
                     lines.append(f"Current fields: {', '.join(current)}")
                 if missing:
                     lines.append(f"Missing fields: {', '.join(missing)}")
-                lines.append(f"Tip: Use sections: --- 基本信息, --- 联系方式, --- 分类信息\n")
+
+                # Smart context based on form type and collection metadata
+                coll = r["collection"]
+                if r["form_type"] == "detail":
+                    # Find o2m relations for subtable suggestions
+                    o2m_fields = self._find_o2m_relations(coll)
+                    if o2m_fields:
+                        lines.append(f"O2M relations (subtable candidates): {', '.join(o2m_fields)}")
+                    lines.append("Action: nb_set_detail(table_uid, detail_json)")
+                    lines.append("Design: Tab基本信息(all fields + sections) + Tab per o2m relation (subtable)")
+                else:
+                    # Suggest field groupings based on field names
+                    groups = self._suggest_field_groups(avail)
+                    if groups:
+                        lines.append(f"Suggested sections: {groups}")
+                    if r["form_type"] == "addnew":
+                        lines.append("Action: nb_set_form(table_uid, \"addnew\", fields_dsl)")
+                    else:
+                        lines.append("Action: nb_set_form(table_uid, \"edit\", fields_dsl)")
+                lines.append("")
 
         return "\n".join(lines)
+
+    def _find_o2m_relations(self, coll: str) -> list[str]:
+        """Find o2m relation fields on a collection."""
+        self._load_meta(coll)
+        schema = self._field_cache.get(coll, {})
+        return [f"{name} → {info.get('target', '?')}"
+                for name, info in schema.items()
+                if info.get("interface") == "o2m"]
+
+    def _suggest_field_groups(self, fields: list[str]) -> str:
+        """Suggest logical field groupings based on field name patterns."""
+        contact = [f for f in fields if f in ("phone", "email", "mobile", "fax",
+                                                "address", "city", "contact")]
+        money = [f for f in fields if f in ("amount", "price", "cost", "total",
+                                             "discount", "budget", "payment",
+                                             "target_amount", "achieved_amount")]
+        date = [f for f in fields if "date" in f or "time" in f]
+
+        groups = []
+        groups.append("--- 基本信息")
+        if contact:
+            groups.append(f"--- 联系方式 ({', '.join(contact)})")
+        if money:
+            groups.append(f"--- 金额信息 ({', '.join(money)})")
+        if date:
+            groups.append(f"--- 时间 ({', '.join(date)})")
+        if any(f in fields for f in ("remarks", "description", "notes", "content")):
+            groups.append("--- 备注")
+        return " / ".join(groups)
 
     def find_placeholders(self, scope: str) -> list[dict]:
         """Find JS placeholder nodes under a scope (tab UID or title prefix).
@@ -2279,13 +2344,29 @@ class NB:
         Preserves title/width and other settings.
         For event placeholders, use inject_event() instead.
 
+        Rejects stub/empty code — must contain ctx.render() to be valid.
+
         Args:
             uid_: UID of the placeholder node
             code: Real JS code to inject
 
         Returns:
             True on success
+
+        Raises:
+            ValueError: If code is a stub (only comments, no ctx.render)
         """
+        # Strip comments and whitespace to check if there's real code
+        stripped = "\n".join(
+            line for line in code.strip().splitlines()
+            if line.strip() and not line.strip().startswith("//")
+        )
+        if not stripped or len(stripped) < 30:
+            raise ValueError(
+                f"Rejected stub code for {uid_}: code has no real implementation "
+                f"(only {len(stripped)} chars of non-comment content). "
+                f"Write real JS with ctx.render() that renders actual UI."
+            )
         return self.update_js(uid_, code)
 
     def inject_event(self, uid_: str, event_name: str, code: str) -> bool:
@@ -2332,12 +2413,14 @@ class NB:
 
         For columns with known type and matching template: fills template with
         metadata (field, subs, threshold, etc.) and writes ready-to-inject JS.
-        For blocks/items/events: writes stub files with description as comments.
+        For items: matches against item templates (profile/gauge/lifecycle/stats)
+        using keyword heuristics on desc + collection field metadata.
+        For blocks/events and unmatched items: writes stub files as [todo].
 
         Args:
             scope: Tab UID or title prefix (e.g. "CRM")
             output_dir: Directory to write JS files
-            templates_dir: Directory containing col-*.js templates
+            templates_dir: Directory containing col-*.js and item-*.js templates
 
         Returns:
             Dict with auto/manual lists and markdown task table.
@@ -2421,7 +2504,16 @@ class NB:
                 })
                 continue
 
-            # --- Blocks / Items: write stub ---
+            # --- Items: try auto-fill from template ---
+            if kind == "item" and collection:
+                item_result = self._auto_fill_item(
+                    uid_, title, desc, collection, templates, output_dir
+                )
+                if item_result:
+                    auto.append(item_result)
+                    continue
+
+            # --- Blocks / Items (unmatched): write stub ---
             fpath = os.path.join(output_dir, f"{uid_}.js")
             with open(fpath, "w") as f:
                 f.write(
@@ -2437,7 +2529,7 @@ class NB:
                 "collection": collection,
             })
 
-        # Build markdown task table
+        # Build markdown task table — items before blocks before events
         lines = [
             "### JS Tasks\n",
             "| # | UID | Kind | Title | Collection | Template | Status |",
@@ -2467,6 +2559,199 @@ class NB:
             "auto_count": len(auto),
             "manual_count": len(manual),
         }
+
+    # ── Item Auto-Fill ────────────────────────────────────────
+
+    _ITEM_GAUGE_KW = {"progress", "进度", "百分比", "回款进度", "达成率", "完成率"}
+    _ITEM_LIFECYCLE_KW = {"阶段", "pipeline", "流程", "生命周期", "状态流转"}
+
+    def _auto_fill_item(self, uid_: str, title: str, desc: str,
+                        collection: str, templates: dict,
+                        output_dir: str) -> dict | None:
+        """Try to auto-fill an item JS from templates.
+
+        Returns an auto-entry dict on success, None if no template matches.
+        """
+        desc_lower = desc.lower()
+
+        # Load collection field metadata
+        self._load_meta(collection)
+        schema = self._field_cache.get(collection, {})
+
+        # --- Gauge: progress/percentage items ---
+        if any(kw in desc_lower for kw in self._ITEM_GAUGE_KW):
+            tpl = templates.get("item-gauge.js")
+            if tpl:
+                filled = self._fill_gauge_item(tpl, desc, schema, title)
+                if filled:
+                    return self._write_item_auto(
+                        uid_, filled, "item-gauge.js", title, collection,
+                        output_dir)
+
+        # --- Lifecycle: stage/pipeline items ---
+        if any(kw in desc_lower for kw in self._ITEM_LIFECYCLE_KW):
+            tpl = templates.get("item-lifecycle.js")
+            if tpl:
+                filled = self._fill_lifecycle_item(tpl, desc, schema)
+                if filled:
+                    return self._write_item_auto(
+                        uid_, filled, "item-lifecycle.js", title, collection,
+                        output_dir)
+
+        # --- Profile (default fallback): tags + date stat ---
+        tpl = templates.get("item-profile.js")
+        if tpl:
+            filled = self._fill_profile_item(tpl, desc, schema, title)
+            if filled:
+                return self._write_item_auto(
+                    uid_, filled, "item-profile.js", title, collection,
+                    output_dir)
+
+        return None
+
+    def _write_item_auto(self, uid_: str, code: str, tpl_name: str,
+                         title: str, collection: str,
+                         output_dir: str) -> dict:
+        fpath = os.path.join(output_dir, f"{uid_}.js")
+        with open(fpath, "w") as f:
+            f.write(code)
+        return {
+            "uid": uid_, "kind": "item",
+            "title": title, "template": tpl_name,
+            "file": os.path.basename(fpath),
+            "collection": collection,
+        }
+
+    def _fill_profile_item(self, tpl: str, desc: str,
+                           schema: dict, title: str) -> str | None:
+        """Fill item-profile.js: select fields as tags + date stat."""
+        PALETTE = ["red", "orange", "blue", "green", "purple",
+                   "cyan", "magenta", "geekblue", "lime", "gold"]
+        tag_fields = []
+        for name, info in schema.items():
+            if info.get("interface") != "select":
+                continue
+            enums = info.get("enum", [])
+            tf: dict = {"field": name}
+            if enums:
+                # Assign colors from palette based on enum order
+                colors = {}
+                for i, e in enumerate(enums):
+                    colors[e.get("value", "")] = PALETTE[i % len(PALETTE)]
+                tf["colors"] = colors
+            tag_fields.append(tf)
+            if len(tag_fields) >= 5:
+                break
+
+        if not tag_fields:
+            return None
+
+        code = tpl
+        code = code.replace("{TAG_FIELDS}",
+                            json.dumps(tag_fields, ensure_ascii=False))
+        code = code.replace("{DATE_FIELD}", "createdAt")
+        # Use title's Chinese title or fallback
+        label = "创建天数"
+        if "建档" in desc:
+            label = "建档天数"
+        elif "注册" in desc:
+            label = "注册天数"
+        code = code.replace("{LABEL}", label)
+        return code
+
+    def _fill_gauge_item(self, tpl: str, desc: str,
+                         schema: dict, title: str) -> str | None:
+        """Fill item-gauge.js: find value/total fields from desc + schema."""
+        import re
+
+        # Try to find amount-like fields
+        value_field = None
+        total_field = None
+
+        # Look for fields mentioned in desc
+        for name, info in schema.items():
+            iface = info.get("interface", "")
+            if iface not in ("number", "percent", "integer"):
+                continue
+            name_lower = name.lower()
+            title_lower = info.get("title", "").lower()
+            combined = name_lower + title_lower
+
+            if any(kw in combined for kw in
+                   ("paid", "received", "已回", "已付", "actual", "实际",
+                    "current", "当前", "完成", "done")):
+                value_field = name
+            elif any(kw in combined for kw in
+                     ("total", "amount", "合同", "目标", "target",
+                      "budget", "预算", "计划")):
+                total_field = name
+
+        if not value_field:
+            # Fallback: first two numeric fields
+            numerics = [n for n, i in schema.items()
+                        if i.get("interface") in ("number", "percent", "integer")]
+            if len(numerics) >= 2:
+                value_field, total_field = numerics[0], numerics[1]
+            elif numerics:
+                value_field = numerics[0]
+                total_field = "100"
+
+        if not value_field:
+            return None
+
+        code = tpl
+        code = code.replace("{VALUE_FIELD}", value_field)
+        code = code.replace("{TOTAL_FIELD}", total_field or "100")
+        code = code.replace("{LABEL}", title)
+        return code
+
+    def _fill_lifecycle_item(self, tpl: str, desc: str,
+                             schema: dict) -> str | None:
+        """Fill item-lifecycle.js: find status/stage field with enum options."""
+        STAGE_COLORS = ["#1890ff", "#52c41a", "#faad14", "#ff4d4f",
+                        "#722ed1", "#13c2c2", "#eb2f96", "#999"]
+
+        # Find the best status/stage field
+        best_field = None
+        best_enums: list = []
+
+        for name, info in schema.items():
+            if info.get("interface") != "select":
+                continue
+            enums = info.get("enum", [])
+            if not enums:
+                continue
+            name_lower = name.lower()
+            title_lower = info.get("title", "").lower()
+            combined = name_lower + title_lower
+
+            # Prefer fields named stage/status/phase
+            is_stage = any(kw in combined for kw in
+                          ("stage", "status", "phase", "阶段", "状态", "流程"))
+            if is_stage and len(enums) >= 3:
+                best_field = name
+                best_enums = enums
+                break
+            # Fallback to any select with 3+ options
+            if not best_field and len(enums) >= 3:
+                best_field = name
+                best_enums = enums
+
+        if not best_field or not best_enums:
+            return None
+
+        stages = [e.get("value", "") for e in best_enums]
+        status_colors = {}
+        for i, e in enumerate(best_enums):
+            status_colors[e.get("value", "")] = STAGE_COLORS[i % len(STAGE_COLORS)]
+
+        code = tpl
+        code = code.replace("{STATUS_FIELD}", best_field)
+        code = code.replace("{STAGES}",
+                            json.dumps(stages, ensure_ascii=False))
+        code = code.replace("{STATUS_COLORS}",
+                            json.dumps(status_colors, ensure_ascii=False))
+        return code
 
     # ── Page Map ───────────────────────────────────────────────
 

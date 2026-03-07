@@ -21,7 +21,15 @@ def register_tools(mcp: FastMCP):
         """Create a menu group (folder) in the NocoBase sidebar.
 
         Groups are purely structural — they hold child pages or sub-groups,
-        but have NO page content themselves. Created at top level by default.
+        but have NO page content themselves.
+
+        IMPORTANT: Build a proper menu hierarchy!
+        1. First call: create ONE top-level system group (e.g. "HRM", "CRM") with parent_id=None
+        2. Then: create sub-groups under it using parent_id=<top_group_id>
+        3. Then: create pages under sub-groups using nb_create_page
+
+        DO NOT create multiple top-level groups — that clutters the sidebar.
+        Use nb_create_menu() instead if you want group + pages in one call.
 
         Args:
             title: Display name for the menu group
@@ -33,7 +41,10 @@ def register_tools(mcp: FastMCP):
             JSON with group route ID.
 
         Example:
-            nb_create_group("Asset Management", "bankoutlined")
+            # Step 1: top-level group
+            nb_create_group("HRM", "teamoutlined")  → {"group_id": 100}
+            # Step 2: sub-groups under it
+            nb_create_group("Employee Mgmt", "useroutlined", parent_id=100)
         """
         nb = get_nb_client()
         gid = nb.group(title, parent_id, icon=icon)
@@ -73,24 +84,31 @@ def register_tools(mcp: FastMCP):
                        pages: str,
                        group_icon: str = "appstoreoutlined",
                        parent_id: Optional[int] = None) -> str:
-        """Create a top-level menu group with child pages in one call.
+        """Create a menu group with child pages in one call.
 
-        Creates a top-level sidebar group with pages directly under it.
-        Each page gets a tab UID for adding content via nb_crud_page.
+        RECOMMENDED workflow for building menus:
+        1. First: nb_create_menu("HRM", "[]", "teamoutlined") → creates top-level group, returns group_id
+        2. Then: nb_create_menu("Employee Mgmt", '[["Employees","useroutlined"]]', parent_id=<group_id>)
+        3. Then: nb_create_menu("Attendance", '[["Records","clockcircleoutlined"]]', parent_id=<group_id>)
+
+        This produces: HRM > Employee Mgmt > Employees, HRM > Attendance > Records
 
         Args:
             group_title: Display name for the menu group
-            pages: JSON array of [title, icon] pairs.
+            pages: JSON array of [title, icon] pairs. Use "[]" for empty group.
                    Example: '[["Asset Ledger","databaseoutlined"],["Purchases","shoppingcartoutlined"]]'
             group_icon: Icon for the group folder
             parent_id: Parent group route ID. Default None = top-level menu.
-                       Only set this when creating a sub-group under an existing group.
+                       Set this to create sub-groups under a top-level system group.
 
         Returns:
-            JSON mapping page titles to their tab UIDs.
+            JSON mapping page titles to their tab UIDs, plus group_id.
 
         Example:
-            nb_create_menu("CRM", '[["Customers","idcardoutlined"],["Contacts","useroutlined"]]', "teamoutlined")
+            # Top group (no pages):
+            nb_create_menu("CRM", "[]", "teamoutlined")  → {"group_id": 100}
+            # Sub-group with pages:
+            nb_create_menu("Sales", '[["Leads","useroutlined"],["Deals","dollaroutlined"]]', parent_id=100)
         """
         nb = get_nb_client()
         page_list = safe_json(pages)
