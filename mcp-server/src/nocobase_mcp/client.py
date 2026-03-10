@@ -220,6 +220,9 @@ def _normalize_fields(fields):
     if isinstance(fields, str):
         # MCP JSON transport may deliver literal \n (two chars) instead of real newlines
         fields = fields.replace("\\n", "\n")
+        # Enforce grid layout: auto-pair single fields into 2-per-row
+        from .markup_parser import enforce_grid_layout
+        fields = enforce_grid_layout(fields)
         fields = [l.strip() for l in fields.strip().split("\n") if l.strip()]
 
     result = []
@@ -1698,12 +1701,15 @@ class NB:
             dict with form_uid, type, node_count
         """
         from .tree_builder import TreeBuilder
-        from .markup_parser import parse_form_html
+        from .markup_parser import parse_form_html, enforce_grid_layout
 
         # Auto-detect: HTML if contains <form> or <field, otherwise DSL
         fields_dsl = markup
         if '<form' in markup or '<field' in markup or '<section' in markup:
             fields_dsl = parse_form_html(markup)
+
+        # Enforce grid layout: auto-pair single fields into 2-per-row
+        fields_dsl = enforce_grid_layout(fields_dsl)
 
         all_models = self._list_all()
         coll = self._get_table_collection(table_uid, all_models)
@@ -1860,6 +1866,12 @@ class NB:
                 "mode": "drawer", "size": "large",
                 "pageModelClass": "ChildPageModel", "uid": click_uid,
             }}}})
+
+        # Enforce grid layout on field-based tabs
+        from .markup_parser import enforce_grid_layout
+        for tab in detail_json:
+            if isinstance(tab.get("fields"), str) and tab["fields"]:
+                tab["fields"] = enforce_grid_layout(tab["fields"])
 
         # Convert js_items in tabs to block definitions
         tb = TreeBuilder(self)

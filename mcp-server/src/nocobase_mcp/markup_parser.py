@@ -61,6 +61,65 @@ def _sanitize_markup(markup: str) -> str:
     return re.sub(pattern, _escape_text, markup, flags=re.DOTALL)
 
 
+def enforce_grid_layout(dsl: str) -> str:
+    """Enforce grid layout: auto-pair single-column fields into 2 per row.
+
+    If a DSL string has fields all on single rows (no pipe separators),
+    pairs them 2-by-2. Section headers (---) and already-paired rows
+    are preserved as-is.
+
+    Before:
+        --- 基本信息
+        employee_no
+        name
+        gender
+        phone
+        email
+
+    After:
+        --- 基本信息
+        employee_no | name
+        gender | phone
+        email
+    """
+    if not dsl or not dsl.strip():
+        return dsl
+
+    lines = dsl.split('\n')
+    result: list[str] = []
+    pending: str | None = None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if stripped.startswith('---') or stripped.startswith('#'):
+            # Section header / markdown — flush pending first
+            if pending:
+                result.append(pending)
+                pending = None
+            result.append(stripped)
+        elif '|' in stripped:
+            # Already has pipe — grid layout present, keep as-is
+            if pending:
+                result.append(pending)
+                pending = None
+            result.append(stripped)
+        else:
+            # Single field — pair with next
+            if pending:
+                result.append(f"{pending} | {stripped}")
+                pending = None
+            else:
+                pending = stripped
+
+    if pending:
+        result.append(pending)
+
+    return '\n'.join(result)
+
+
 def parse_form_html(markup: str) -> str:
     """Convert <form> HTML markup to fields DSL string.
 
