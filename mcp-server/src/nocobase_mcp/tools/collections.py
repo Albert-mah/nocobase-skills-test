@@ -515,6 +515,22 @@ def register_tools(mcp: FastMCP):
                     rel_skip += 1
                     continue
 
+                # Validate target collection exists (skip self-references to own name)
+                target_name = rel.get("target", "")
+                if target_name and target_name != name:
+                    try:
+                        target_check = client.get(
+                            f"/api/collections:list?paginate=false&filter="
+                            + urllib.parse.quote(json.dumps({"name": target_name})))
+                        if not target_check.get("data"):
+                            results.append(
+                                f"[relations] {rfield}: target '{target_name}' not found — skipped. "
+                                f"Create target collection first, then re-run setup.")
+                            rel_skip += 1
+                            continue
+                    except APIError:
+                        pass  # If check fails, proceed anyway
+
                 nb_type = type_map.get(rel["type"], rel["type"])
                 rlabel = rel.get("label")
                 # Auto-detect label from target collection's titleField

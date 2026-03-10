@@ -517,9 +517,24 @@ class TreeBuilder:
                 sizes[row_id] = [24]
                 sort_idx += 1
             elif item["type"] == "row":
-                # Filter out invalid fields
-                valid_cols = [(name, span) for name, span in item["cols"]
-                              if self.nb._valid_field(coll, name)]
+                # Filter out invalid fields + broken relation targets
+                _relation_ifaces = {"m2o", "m2m", "o2m", "o2one", "obo", "oho"}
+                valid_cols, skipped = [], []
+                for name, span in item["cols"]:
+                    if not self.nb._valid_field(coll, name):
+                        skipped.append(name)
+                    elif self._iface(coll, name) in _relation_ifaces:
+                        target = self._target(coll, name)
+                        if target and not self.nb._valid_collection(target):
+                            skipped.append(name)
+                        else:
+                            valid_cols.append((name, span))
+                    else:
+                        valid_cols.append((name, span))
+                if skipped:
+                    coll_label = self.nb._coll_title_cache.get(coll, coll)
+                    self.nb.warnings.append(
+                        f"detail: skipped fields {skipped} in {coll_label}({coll})")
                 if not valid_cols:
                     continue
                 if len(valid_cols) != len(item["cols"]):

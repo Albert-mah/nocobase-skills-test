@@ -470,17 +470,32 @@ class NB:
         return bool(self._field_cache.get(coll))
 
     def _filter_valid_fields(self, coll, fields):
-        """Filter field list to only existing fields. Returns (valid, skipped)."""
+        """Filter field list to only existing fields. Returns (valid, skipped).
+
+        Also validates relationship fields: m2o/m2m/o2m fields whose target
+        collection doesn't exist are skipped (prevents rendering crashes like
+        'Cannot read properties of undefined (reading filterTargetKey)').
+        """
         self._load_meta(coll)
         schema = self._field_cache.get(coll, {})
         if not schema:
             return fields, []  # no metadata = allow all
         valid, skipped = [], []
+        _relation_ifaces = {"m2o", "m2m", "o2m", "o2one", "obo", "oho"}
         for f in fields:
-            if f in schema:
-                valid.append(f)
-            else:
+            if f not in schema:
                 skipped.append(f)
+                continue
+            # Validate relation field target exists
+            info = schema[f]
+            if info.get("interface") in _relation_ifaces:
+                target = info.get("target", "")
+                if target and not self._valid_collection(target):
+                    skipped.append(f)
+                    self.warnings.append(
+                        f"relation field '{f}' target '{target}' not found — skipped")
+                    continue
+            valid.append(f)
         if skipped:
             coll_label = self._coll_title_cache.get(coll, coll)
             self.warnings.append(
