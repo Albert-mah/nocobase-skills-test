@@ -1959,7 +1959,13 @@ class NB:
                 info["total_fields"] = total_fields
                 info["available_fields"] = editable
                 info["page"] = page_title or ""
-                info["status"] = "[ok]" if total_fields and info["field_count"] / total_fields >= 0.7 else "[todo]"
+                # Determine status
+                if info.get("bad_tabs"):
+                    info["status"] = "[fix: merge tabs]"
+                elif total_fields and info["field_count"] / total_fields >= 0.7:
+                    info["status"] = "[ok]"
+                else:
+                    info["status"] = "[todo]"
                 results.append(info)
 
         # Generate markdown task table
@@ -1967,6 +1973,7 @@ class NB:
         return {"tasks": results, "task_table": task_table,
                 "total": len(results),
                 "todo": len([r for r in results if r["status"] == "[todo]"]),
+                "fix": len([r for r in results if r["status"] == "[fix: merge tabs]"]),
                 "ok": len([r for r in results if r["status"] == "[ok]"])}
 
     def _assess_popup_form(self, table_uid: str, action_use: str,
@@ -2067,9 +2074,24 @@ class NB:
         has_sections = any(uid_map[u].get("use") == "DividerItemModel"
                           for u in descendants if u in uid_map)
 
+        # Detect bad tab structure: multiple tabs that are all field-only (no subtables)
+        # Each tab that has ONLY DetailsItemModel children (no TableBlockModel) is a "field tab"
+        tab_uids = [u for u in descendants if u in uid_map
+                    and uid_map[u].get("use") == "ChildPageTabModel"]
+        field_only_tab_count = 0
+        for tab_u in tab_uids:
+            tab_desc = self._collect_descendants(tab_u)
+            has_subtable = any(uid_map.get(d, {}).get("use") == "TableBlockModel"
+                              for d in tab_desc if d in uid_map)
+            if not has_subtable:
+                field_only_tab_count += 1
+
+        bad_tabs = field_only_tab_count > 1
+
         return {"form_type": "detail", "field_count": len(field_names),
                 "form_uid": cp_uid, "fields": field_names,
-                "has_sections": has_sections, "tabs": tab_count}
+                "has_sections": has_sections, "tabs": tab_count,
+                "bad_tabs": bad_tabs, "field_only_tabs": field_only_tab_count}
 
     def _find_page_title_for(self, uid_: str, uid_map: dict) -> str | None:
         """Walk parent chain to find page title from route."""
@@ -2123,7 +2145,20 @@ class NB:
                 f"| {i} | {r['page']} | {r['form_type']} | {tuid} | "
                 f"{r['collection']} | {pct} | {r['status']} | {sect} | {r['status']} |")
 
-        # Add context for [todo] tasks
+        # Add context for tasks needing action
+        merge_tabs = [r for r in results if r["status"] == "[fix: merge tabs]"]
+        if merge_tabs:
+            lines.append("\n### ⚠️ Tab Structure Issues (merge required):\n")
+            for r in merge_tabs:
+                lines.append(f"#### {r['page']} detail ({r['table_uid'][:12]}...)")
+                lines.append(f"Problem: {r.get('field_only_tabs', 0)} tabs have only "
+                             f"field displays (no subtables). Same-table fields should be "
+                             f"in ONE tab using --- Section headers.")
+                lines.append(f"Fix: nb_set_detail(table_uid, [...]) — merge all field-only "
+                             f"tabs into first '概况' tab with --- Section groups. "
+                             f"Only o2m subtable associations get separate tabs.")
+                lines.append("")
+
         todos = [r for r in results if r["status"] == "[todo]"]
         if todos:
             lines.append("\n### Context for [todo] tasks:\n")
@@ -2345,6 +2380,7 @@ class NB:
         For event placeholders, use inject_event() instead.
 
         Rejects stub/empty code — must contain ctx.render() to be valid.
+        Warns on common mistakes: ctx.components (use ctx.antd), bracket filters.
 
         Args:
             uid_: UID of the placeholder node
@@ -2355,6 +2391,8 @@ class NB:
 
         Raises:
             ValueError: If code is a stub (only comments, no ctx.render)
+            ValueError: If code uses ctx.components (should be ctx.antd)
+            ValueError: If code uses bracket filter syntax (should be JSON filter)
         """
         # Strip comments and whitespace to check if there's real code
         stripped = "\n".join(
@@ -2367,6 +2405,75 @@ class NB:
                 f"(only {len(stripped)} chars of non-comment content). "
                 f"Write real JS with ctx.render() that renders actual UI."
             )
+
+        # Validate: ctx.components does not exist in NocoBase JS sandbox
+        if "ctx.components" in code:
+            raise ValueError(
+                f"Rejected code for {uid_}: 'ctx.components' does not exist in NocoBase. "
+                f"Use 'ctx.antd' instead. Example: const {{Tag, Progress}} = ctx.antd; "
+                f"Available: ctx.React, ctx.antd (Ant Design 5), ctx.api, ctx.render(), ctx.record"
+            )
+
+        # Validate: non-existent sandbox APIs
+        import re
+        bad_apis = re.findall(r'ctx\.(charts|useData|echarts|g2|dataSource|store|model|service|utils)', code)
+        if bad_apis:
+            raise ValueError(
+                f"Rejected code for {uid_}: 'ctx.{bad_apis[0]}' does not exist in NocoBase JS sandbox. "
+                f"There is NO chart library (AntV/G2/ECharts) available. "
+                f"Use ctx.antd Progress bars for distribution charts, "
+                f"or plain div bars for trends. "
+                f"Available: ctx.React, ctx.antd (Ant Design 5), ctx.api, ctx.render(), ctx.record"
+            )
+
+        # Validate: Pie/Bar/Line/Column etc from non-existent chart libs
+        chart_imports = re.findall(r'(?:const|var|let)\s*\{[^}]*(?:Pie|Bar|Line|Column|Area|Scatter|Gauge|Radar|Funnel)[^}]*\}\s*=\s*ctx\.', code)
+        if chart_imports:
+            raise ValueError(
+                f"Rejected code for {uid_}: Chart components (Pie/Bar/Line/etc) are not available in ctx. "
+                f"NocoBase JS sandbox has NO chart library. "
+                f"Use ctx.antd.Progress for bar charts, plain divs for trends. "
+                f"See js-patterns.md for correct patterns."
+            )
+
+        # Validate: api.collection().list() is NOT the correct API
+        if re.search(r'api\.collection\s*\(', code):
+            raise ValueError(
+                f"Rejected code for {uid_}: 'api.collection().list()' is NOT NocoBase JS sandbox API. "
+                f"Use: ctx.api.request({{url:'COLLECTION:list', params:{{paginate:false}}}}) "
+                f"Response: r?.data?.data (array of records). "
+                f"See js-patterns.md for correct data fetching patterns."
+            )
+
+        # Validate: React hooks (useState/useEffect) not available in eval context
+        if re.search(r'\b(useState|useEffect|useCallback|useMemo|useRef|useContext)\b', code):
+            raise ValueError(
+                f"Rejected code for {uid_}: React hooks (useState/useEffect/etc) are NOT available. "
+                f"NocoBase JS blocks run in eval() context, not React component lifecycle. "
+                f"Use async IIFE pattern instead: (async()=>{{ const data = await ctx.api.request({{...}}); ctx.render(h(...)); }})(); "
+                f"See js-patterns.md for correct async data fetching patterns."
+            )
+
+        # Validate: bracket filter syntax is not NocoBase API format
+        if "filter[" in code:
+            raise ValueError(
+                f"Rejected code for {uid_}: 'filter[field]=value' is not NocoBase filter syntax. "
+                f"Use JSON filter: params:{{filter:{{field:{{$operator:'value'}}}}}}. "
+                f"Date operators: $dateAfter, $dateBefore. "
+                f"Number operators: $gt, $gte, $lt, $lte. "
+                f"String operators: $includes, $eq, $ne."
+            )
+
+        # Validate: direct DOM manipulation — must use ctx.render() instead
+        if re.search(r'document\.(createElement|getElementById|querySelector|body|head)', code) or "innerHTML" in code:
+            raise ValueError(
+                f"Rejected code for {uid_}: Direct DOM manipulation (document.createElement / innerHTML) "
+                f"is NOT allowed in NocoBase JS sandbox. "
+                f"Use ctx.render(h('div', ...)) to output content. "
+                f"'h' = ctx.React.createElement. Build your entire UI as React elements. "
+                f"See js-patterns.md for correct rendering patterns."
+            )
+
         return self.update_js(uid_, code)
 
     def inject_event(self, uid_: str, event_name: str, code: str) -> bool:

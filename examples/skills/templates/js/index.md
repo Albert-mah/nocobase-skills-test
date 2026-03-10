@@ -12,6 +12,12 @@ All JS blocks run in a sandbox with these globals:
 | `ctx.render(element)` | Output to the block container |
 | `ctx.record` | Current row data (available in **columns** and **detail items** only, NOT in page blocks) |
 
+**⚠️ NOT available** (will be rejected by tool validation):
+- `ctx.charts`, `ctx.echarts`, `ctx.g2`, `ctx.dataSource` — NO chart library, NO dataSource API
+- `useState`, `useEffect`, `useCallback` — NO React hooks (blocks run in eval, not component lifecycle)
+- Use `ctx.api.request({url, params})` for data, async IIFE `(async()=>{...})()` for async code
+- Use `ctx.antd.Progress` for bar charts, SVG/div for custom visuals
+
 ## Phase 2 Workflow
 
 After `nb_auto_js("PREFIX")`, columns are auto-filled. Blocks/items/events are `[todo]` stubs.

@@ -26,13 +26,15 @@ These are your visual spec — JS must match these prototypes.
 
 ## Step 4.3: Implement ALL [todo] items
 
-**Read `ref/js-patterns.md` now** — it has code patterns for distribution, funnel, amount, alert, trend, profile, events.
+Read `ref/js-patterns.md` — 里面有完整的 API 说明和 7 种可复制的代码模板。
 
 For each `[todo]`: write real JS, call `nb_inject_js(uid, code)`, mark `[x]`.
 
 Priority: blocks > items > events.
 
 **If many [todo] items (10+)**: use cluster/subagent mode — spawn one Task per item.
+
+If `nb_inject_js` rejects your code, error message 会说明原因。对照 `ref/js-patterns.md` 顶部的"Common Mistakes and Fixes"表查正确写法。
 
 ## Step 4.4: Verify [sequential]
 

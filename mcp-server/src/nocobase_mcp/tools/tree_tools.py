@@ -21,8 +21,12 @@ def register_tools(mcp: FastMCP):
 
     @mcp.tool()
     def nb_compose_page(tab_uid: str, blocks_json: str,
-                        layout_json: Optional[str] = None) -> str:
+                        layout_json: Optional[list] = None) -> str:
         """Build a page from free-form block definitions — any blocks, any layout.
+
+        LAYOUT RULE: Always provide layout_json for non-reference pages.
+        Table left (16 cols) + chart sidebar right (8 cols) is the standard pattern.
+        Without layout_json, all blocks stack full-width (plain CRUD list look).
 
         Unlike nb_crud_page which forces a KPI+Filter+Table+Form pattern,
         compose_page lets you freely combine any blocks in any layout.
@@ -89,7 +93,7 @@ def register_tools(mcp: FastMCP):
 
         layout = None
         if layout_json:
-            layout = safe_json(layout_json)
+            layout = layout_json if isinstance(layout_json, list) else safe_json(layout_json)
             if not isinstance(layout, list):
                 return json.dumps({"error": "layout_json must be a JSON array of rows"})
 
@@ -169,11 +173,11 @@ def register_tools(mcp: FastMCP):
                     results.append({"index": i, "error": "Missing tab_uid or blocks"})
                     continue
 
-                layout_str = json.dumps(page["layout"]) if page.get("layout") else None
+                layout_val = page.get("layout")
                 r = nb_compose_page(
                     tab_uid=tab,
                     blocks_json=json.dumps(blocks),
-                    layout_json=layout_str,
+                    layout_json=layout_val,
                 )
                 parsed = json.loads(r)
                 parsed["index"] = i
@@ -194,6 +198,11 @@ def register_tools(mcp: FastMCP):
     @mcp.tool()
     def nb_page_markup(tab_uid: str, markup: str) -> str:
         """Build a page from XML markup. JS nodes are description-only placeholders.
+
+        LAYOUT RULE: Every non-reference page MUST use <row> with span for
+        side-by-side layout. Table left (span=14-18) + sidebar right (span=6-10).
+        KPI strip is the ONLY thing above the table row. Do NOT stack everything
+        full-width — that makes pages look like a plain CRUD list.
 
         Two-phase workflow:
           Phase 1: Write XML markup → nb_page_markup() → page with JS placeholders
@@ -663,9 +672,11 @@ def register_tools(mcp: FastMCP):
         nb = get_nb_client()
         try:
             result = nb.auto_forms(scope)
+            fix_count = result.get('fix', 0)
+            fix_msg = f", {fix_count} need tab merge" if fix_count else ""
             summary = (
                 f"Scanned {result['total']} forms: "
-                f"{result['ok']} ok, {result['todo']} need refinement.\n\n"
+                f"{result['ok']} ok, {result['todo']} need refinement{fix_msg}.\n\n"
             )
             return summary + result["task_table"]
         except Exception as e:
@@ -717,15 +728,22 @@ def register_tools(mcp: FastMCP):
         """Replace a table's detail popup with new tab structure.
 
         Destroys the old detail popup and builds a new one with tabs.
-        Supports fields tabs, subtable tabs, and JS item placeholders.
+
+        CRITICAL TAB RULE:
+          Tab 1 = ALL main-table fields (use --- Section to group) + js_items.
+          Tab 2+ = ONLY association subtables (o2m/m2m relations).
+          NEVER split same-table fields into multiple tabs.
+          ❌ Wrong: tab1="基本信息" tab2="联系方式" tab3="工作信息" (same table!)
+          ✅ Right: tab1="概况" with "--- 基本信息\\n...\\n--- 联系方式\\n...\\n--- 工作信息\\n..."
 
         Args:
             table_uid: TableBlockModel UID
             detail_json: Array of tab definitions. Each tab:
-                - Fields tab:
-                    {"title": "基本信息", "fields": "name|code\\nstatus|industry",
+                - Fields tab (first tab — put ALL fields here):
+                    {"title": "概况",
+                     "fields": "--- 基本信息\\nname|code\\n--- 联系方式\\nphone|email",
                      "js_items": [{"title": "画像", "desc": "等级标签+状态+来源"}]}
-                - Subtable tab:
+                - Subtable tab (only for o2m relations):
                     {"title": "联系人", "assoc": "contacts",
                      "coll": "nb_crm_contacts", "fields": ["name","phone"]}
 
@@ -736,7 +754,8 @@ def register_tools(mcp: FastMCP):
 
         Example:
             nb_set_detail("tbl123", [
-                {"title": "基本信息", "fields": "name|code\\nstatus|industry",
+                {"title": "概况",
+                 "fields": "--- 基本信息\\nname|code\\nstatus|industry\\n--- 联系方式\\nphone|email",
                  "js_items": [{"title": "画像", "desc": "等级标签+状态"}]},
                 {"title": "联系人", "assoc": "contacts",
                  "coll": "nb_crm_contacts", "fields": ["name","phone"]}
@@ -748,6 +767,22 @@ def register_tools(mcp: FastMCP):
                 detail_json = safe_json(detail_json)
             if not isinstance(detail_json, list):
                 return json.dumps({"error": "detail_json must be a JSON array"})
+
+            # Validate tab structure: warn if multiple tabs all lack assoc (same-table split)
+            field_only_tabs = [t for t in detail_json
+                               if not t.get("assoc") and not t.get("coll")]
+            if len(field_only_tabs) > 1:
+                tab_titles = [t.get("title", "?") for t in field_only_tabs]
+                return json.dumps({
+                    "error": (
+                        f"Bad tab structure: {len(field_only_tabs)} tabs without subtable "
+                        f"association ({', '.join(tab_titles)}). "
+                        f"Same-table fields must be in ONE tab using --- Section headers "
+                        f"to group them. Only o2m/m2m subtables get their own tabs. "
+                        f"Fix: merge [{', '.join(tab_titles)}] into a single '概况' tab "
+                        f"with '--- {tab_titles[0]}\\n...\\n--- {tab_titles[1]}\\n...' sections."
+                    )
+                })
 
             result = nb.set_detail(table_uid, detail_json)
             if nb.warnings:

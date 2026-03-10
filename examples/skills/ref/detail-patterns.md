@@ -2,6 +2,16 @@
 
 Read this when refining forms/details in Phase 3B. Do NOT read upfront.
 
+## Tab 结构规则
+
+`nb_set_detail` 会自动校验 tab 结构。如果传入多个 tab 都没有 `assoc`（子表关联），
+工具会拒绝并提示合并。
+
+**Tab 1 = 主表概况**：全部字段用 `--- Section` 分组 + js_items 一览卡片。
+**Tab 2+ = 仅关联子表**：每个 o2m 关系独立一个 tab。
+
+判断：同一张表的字段 → 同一个 tab 用 `---` 分组。不同表的关联记录 → 独立 tab。
+
 ## DETAIL = A FULL PAGE
 
 A detail popup is NOT a field viewer. It is the user's workspace for this record.
@@ -15,7 +25,7 @@ A detail popup is NOT a field viewer. It is the user's workspace for this record
 | **Field sections** | Organized data | --- 基本信息, --- 联系方式 |
 | **Subtables** (tabs) | Related records | 联系人, 商机, 合同 |
 
-**Every core entity: 3+ tabs, 2+ js_items on first tab.**
+**核心实体: 第一个 tab 有 2+ js_items + 全部字段分组。子表数量决定额外 tab 数。**
 
 ### js_item desc rules
 
@@ -75,10 +85,28 @@ BAD (vague): "客户画像" or "进度显示"
 ]
 ```
 
-## Secondary entities (1-2 tabs, 1 js_item)
+## Secondary entities (1 tab, 1 js_item)
 
-报价, 回款, 审批: 概况(fields + 1 js_item) — no subtables.
+报价, 回款, 审批: 一个"概况" tab (全部字段 + 1 js_item) — 无子表所以只需 1 个 tab。
 
 ## Reference entities — skip (auto-generated default is fine)
 
 产品, 知识库, 竞争对手, 公海池, 合同明细.
+
+## 反面教材 ❌
+
+```json
+// ❌ 错误：把同一张表的字段拆成多个 tab
+[
+  {"title": "基本信息", "fields": "name|code"},
+  {"title": "联系方式", "fields": "phone|email"},
+  {"title": "工作信息", "fields": "department|position"}
+]
+
+// ✅ 正确：一个 tab 内用 Section 分组
+[
+  {"title": "概况",
+   "fields": "--- 基本信息\nname|code\n--- 联系方式\nphone|email\n--- 工作信息\ndepartment|position",
+   "js_items": [{"title": "员工画像", "desc": "大字姓名+部门+职位+入职天数+状态标签"}]}
+]
+```

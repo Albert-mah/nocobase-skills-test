@@ -26,7 +26,7 @@ All state lives in `notes.md`. `## Status` and `## Next` MUST be in the first 5 
 ```
 
 **On start**: Read notes.md → find `## Next` → read that ONE file → execute.
-**On every step**: Update notes.md immediately. Use `[x]`/`[ ]` checkboxes.
+**On every step**: Update notes.md (UIDs, field names, row counts, task status). notes.md 是你唯一的持久状态。
 **On phase complete**: Update `## Status` + `## Next` → summarize to user → wait for confirmation.
 
 ## Phase Chain

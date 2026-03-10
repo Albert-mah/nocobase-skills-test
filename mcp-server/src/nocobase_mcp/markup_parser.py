@@ -145,7 +145,53 @@ class PageMarkupParser:
             meta["_filter_manager"] = filter_managers
 
         meta["node_count"] = root.count_nodes()
+
+        # Validate layout quality
+        self._validate_layout(page_el, coll)
+
         return root, meta
+
+    def _validate_layout(self, page_el: ET.Element, coll: str) -> None:
+        """Check page structure and emit warnings for common layout issues."""
+        has_table = False
+        table_in_row = False
+        has_js_block = False
+
+        for child in page_el:
+            if child.tag == "table":
+                has_table = True
+            elif child.tag == "row":
+                for rc in child:
+                    if rc.tag == "table":
+                        has_table = True
+                        table_in_row = True
+                    elif rc.tag == "stack":
+                        for sc in rc:
+                            if sc.tag == "table":
+                                has_table = True
+                                table_in_row = True
+                            elif sc.tag in ("js-block", "js-item"):
+                                has_js_block = True
+                    elif rc.tag in ("js-block", "js-item"):
+                        has_js_block = True
+            elif child.tag in ("js-block", "js-item"):
+                has_js_block = True
+
+        # Warn: table not in <row> (no side-by-side layout)
+        if has_table and not table_in_row:
+            self.nb.warnings.append(
+                "LAYOUT: <table> is not inside a <row> — page has no side-by-side layout. "
+                "Wrap table in <row> with span and add a <stack> sidebar with <js-block> charts. "
+                "Example: <row><table span=\"16\" .../><stack span=\"8\"><js-block>chart</js-block></stack></row>"
+            )
+
+        # Warn: no js-block on a page with tables (pure CRUD)
+        if has_table and not has_js_block:
+            self.nb.warnings.append(
+                "LAYOUT: Page has <table> but no <js-block> — this is a plain CRUD list. "
+                "Add 1-2 <js-block> chart/stat placeholders in a sidebar <stack> to make "
+                "the page more useful. Every non-reference page should have visualizations."
+            )
 
     def _parse_row_children(
         self, row_el: ET.Element, coll: str, root: TreeNode,

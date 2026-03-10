@@ -226,11 +226,12 @@ class TreeBuilder:
     _JS_COL_TEMPLATES: dict[str, str] = {
         "composite": (
             "const r=ctx.record||{};const h=ctx.React.createElement;"
+            "const v=function(f){var x=r[f];return typeof x==='object'&&x!==null?x.name||x.title||x.label||'':x};"
             "ctx.render(h('div',null,"
             "h('div',{style:{fontWeight:500,fontSize:13,lineHeight:'20px',color:'#1890ff'}},"
-            "r.{field}||'-'),"
+            "v('{field}')||'-'),"
             "h('div',{style:{color:'#8c8c8c',fontSize:12,marginTop:2}},"
-            "[{subs_str}].map(function(f){return r[f]}).filter(Boolean).join(' \\u00b7 ')||'')));"
+            "[{subs_str}].map(function(f){return v(f)}).filter(Boolean).join(' \\u00b7 ')||'')));"
         ),
         "currency": (
             "const v=Number((ctx.record||{}).{field})||0;"

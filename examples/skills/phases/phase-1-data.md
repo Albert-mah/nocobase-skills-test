@@ -20,11 +20,17 @@ nb_setup_collection(name, title, field_interfaces, relations)
 - e.g. customers → contacts (o2m), customers → opportunities (o2m)
 - Without these, detail subtables will be empty
 
-## Step 1.3: Insert Seed Data
+nb_setup_collection 调用之间有 30 秒冷却。先准备好所有表的定义，然后依次调用即可。
+
+## Step 1.3: Insert Seed Data — MANDATORY, DO NOT SKIP
+
+**An empty system is useless.** Users need to see real-looking data to evaluate the system.
 
 - Generate INSERT statements (5-10 rows per table, realistic Chinese data)
-- `nb_execute_sql(inserts)` — parent tables first
+- `nb_execute_sql(inserts)` — parent tables first (FK dependencies)
 - For large data: use `nb_execute_sql_file()` with a .sql file
+- Data must be realistic: real Chinese names, valid phone numbers, reasonable dates, meaningful enum values
+- After inserting, verify: `nb_execute_sql("SELECT count(*) FROM table_name")` for each table
 
 ## Step 1.4: Write Notes — IMMEDIATELY after each sub-step
 

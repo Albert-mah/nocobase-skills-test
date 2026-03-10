@@ -1,6 +1,17 @@
 # JS Code Patterns
 
-Read this when implementing JS in Phase 4. Do NOT read upfront.
+## Quick Reference — Common Mistakes and Fixes
+
+| Wrong | Correct | Why |
+|-------|---------|-----|
+| `ctx.charts` / `ctx.echarts` / `ctx.g2` | `ctx.antd.Progress` + `div` | 沙箱里没有图表库 |
+| `ctx.dataSource` / `ctx.utils` | `ctx.api.request({url, params})` | 沙箱里只有 ctx.api |
+| `useState` / `useEffect` | `(async()=>{...})();` | eval 上下文，不是 React 组件 |
+| `api.collection('x').list()` | `ctx.api.request({url:'x:list', params:{paginate:false}})` | 没有 ORM 风格 API |
+| `document.createElement` / `innerHTML` | `ctx.render(h('div', ...))` | 必须用 ctx.render 输出 |
+| `filter[field]=value` 查询字符串 | `params:{filter:{field:{$op:'val'}}}` | NocoBase 用 JSON filter |
+| `{Pie, Bar, Line}` 图表组件 | `Progress` 条形 + `div` 柱状 | 没有 AntV/ECharts |
+| `r.department` (M2O 字段) | `r.department?.name` | M2O 返回对象，不是字符串 |
 
 ## JS Sandbox
 
@@ -14,6 +25,47 @@ Read this when implementing JS in Phase 4. Do NOT read upfront.
 3. `ctx.render()` exactly once
 4. No external imports, no Card wrapper, no backticks in code string
 5. No JS for select/enum columns (NocoBase renders them natively)
+6. **NO chart library** — ctx.charts, ctx.echarts, ctx.g2 do NOT exist. Use `ctx.antd.Progress` for bars, plain `div` for trends.
+7. **NO React hooks** — useState, useEffect, useCallback etc are NOT available. Blocks run in eval(), not component lifecycle. Use async IIFE: `(async()=>{...})();`
+8. **NO ctx.dataSource, ctx.utils** — these APIs do NOT exist.
+9. **NO api.collection().list()** — this ORM-style API does NOT exist in JS sandbox.
+10. Data fetching (ONLY correct way): `const r = await ctx.api.request({url:'COLLECTION:list', params:{paginate:false}}); const items = r?.data?.data || [];`
+
+## M2O / Relation Field Handling (CRITICAL)
+
+M2O fields (department, position, employee, etc.) return **objects** like `{id, name, ...}`, NOT strings.
+
+```javascript
+// ❌ WRONG — renders [object Object]
+const dept = r.department;
+// ❌ WRONG — same problem in .map()
+["department","position"].map(f => r[f])
+
+// ✅ CORRECT — extract .name from relation objects
+const dept = r.department?.name || '-';
+// ✅ CORRECT — helper function for mixed fields
+const v = f => { const x = r[f]; return typeof x === 'object' && x !== null ? (x.name || x.title || x.label || '') : x; };
+["department","position"].map(f => v(f)).filter(Boolean).join(' · ')
+```
+
+## NocoBase Filter API Syntax (CRITICAL)
+
+```javascript
+// ❌ WRONG — query string bracket notation
+params: { filter: { "date>=": "2025-03-01" } }
+// ❌ WRONG — filter[field>]=value is NOT NocoBase syntax
+url: 'collection:list?filter[date>]=2025-03-01'
+
+// ✅ CORRECT — NocoBase JSON filter with operators
+params: { filter: { date: { $dateAfter: "2025-03-01" } } }
+params: { filter: { status: "active" } }  // exact match
+params: { filter: { amount: { $gt: 1000 } } }  // greater than
+params: { filter: { name: { $includes: "keyword" } } }  // contains
+
+// Common date operators: $dateAfter, $dateBefore, $dateOn
+// Common number operators: $gt, $gte, $lt, $lte
+// Common string operators: $includes, $notIncludes, $eq, $ne
+```
 
 ## Pattern: Distribution (most common)
 ```javascript
@@ -21,7 +73,8 @@ Read this when implementing JS in Phase 4. Do NOT read upfront.
 const colors=['#1890ff','#52c41a','#faad14','#ff4d4f','#722ed1','#13c2c2'];
 try{const r=await ctx.api.request({url:'COLLECTION:list',params:{paginate:false}});
 const items=r?.data?.data||[];const counts={};
-items.forEach(i=>{const v=i.FIELD||'(empty)';counts[v]=(counts[v]||0)+1;});
+// NOTE: For m2o fields use i.FIELD?.name, for plain fields use i.FIELD
+items.forEach(i=>{const v=i.FIELD?.name||i.FIELD||'(empty)';counts[v]=(counts[v]||0)+1;});
 const total=items.length||1;
 const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
 ctx.render(h('div',{style:{padding:'4px 0'}},
@@ -78,6 +131,8 @@ ctx.render(h('div',{style:{padding:'4px 0'}},
 
 ## Pattern: Monthly Trend
 ```javascript
+// NOTE: For date filtering, use NocoBase operators like $dateAfter/$dateBefore
+// Do NOT use filter[field>]=value bracket syntax
 (async()=>{const h=ctx.React.createElement;
 const colors=['#e6f7ff','#bae7ff','#91d5ff','#69c0ff','#40a9ff','#1890ff'];
 try{const r=await ctx.api.request({url:'COLLECTION:list',params:{paginate:false}});
@@ -98,6 +153,7 @@ ctx.render(h('div',{style:{display:'flex',alignItems:'flex-end',gap:4,height:100
 ```javascript
 const h=ctx.React.createElement;const{Tag,Statistic,Row,Col}=ctx.antd;
 const r=ctx.record||{};
+// Helper for m2o fields: r.department?.name instead of r.department
 const days=Math.floor((Date.now()-new Date(r.createdAt))/86400000);
 ctx.render(h('div',{style:{padding:8}},
   h(Row,{gutter:12},

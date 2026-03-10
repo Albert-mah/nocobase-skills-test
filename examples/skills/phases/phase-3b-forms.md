@@ -17,9 +17,18 @@ Cross-reference with "Detail & Form Design" from Phase 3.
 
 **Read `ref/detail-patterns.md` now** — it has detail JSON examples and design rules.
 
+### DETAIL TAB 规则
+
+`nb_set_detail` 会自动校验 — 多个 tab 没有 `assoc` 子表关联时工具拒绝执行。
+
+**Tab 1 = "概况"**：主表全部字段用 `--- Section` 分组 + js_items
+**Tab 2+ = 仅子表**：每个 o2m 关系一个 tab（必须有 `assoc` 和 `coll`）
+
+同一张表的字段 → 同一个 tab 用 Section 分组。关联子表记录 → 独立 tab。
+
 For each core business page:
 1. Refine addnew/edit forms with sections (Fields DSL below)
-2. Replace detail popup with multi-tab structure (detail JSON below)
+2. Replace detail popup — first tab = ALL main fields + js_items, subtable tabs only for o2m
 3. Mark `[x]` in notes.md after each
 
 ### Fields DSL (for nb_set_form)
@@ -34,12 +43,16 @@ phone | email
 ### Detail JSON (for nb_set_detail)
 ```json
 [
-  {"title": "概况", "fields": "name|code\nstatus|grade",
+  {"title": "概况",
+   "fields": "--- 基本信息\nname|code\nstatus|grade\n--- 联系方式\nphone|email\n--- 备注\nremarks",
    "js_items": [{"title": "画像", "desc": "等级标签+状态+建档天数"}]},
   {"title": "联系人", "assoc": "contacts", "coll": "nb_crm_contacts",
    "fields": ["name","phone","position"]}
 ]
 ```
+
+**注意**：第一个 tab 的 fields 必须包含主表全部可显示字段，用 `---` 分区。
+没有子表关系的实体（如工资条、加班记录）只需要 1 个 tab。
 
 ### Events (optional)
 ```python

@@ -32,6 +32,8 @@ const h = ctx.React.createElement;
 - Different visualization from other blocks on same page
 
 ## Steps
-1. Write JS code
-2. Save to `js/{UID}.js` (events: `js/{UID}__evt__{EVENT_NAME}.js`)
+1. Read `ref/js-patterns.md` — find a matching pattern, copy and adapt it
+2. Write JS code, save to `js/{UID}.js` (events: `js/{UID}__evt__{EVENT_NAME}.js`)
 3. Update notes.md: mark JS Tasks row as `[done]` or `[fail]`
+
+If `nb_inject_js` rejects your code, error message 会说明原因，对照 `ref/js-patterns.md` 顶部表格查正确写法。
