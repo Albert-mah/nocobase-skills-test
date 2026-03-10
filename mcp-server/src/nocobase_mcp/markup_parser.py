@@ -41,13 +41,27 @@ if TYPE_CHECKING:
     from .client import NB
 
 
+def _fix_boolean_attrs(markup: str) -> str:
+    """Convert HTML boolean attributes to XML-compatible form.
+
+    XML doesn't support valueless attributes like `required` or `disabled`.
+    Converts `required` → `required="true"`, etc.
+    """
+    # Match word-boundary boolean attrs NOT followed by = (which means they already have a value)
+    bool_attrs = r'\b(required|disabled|readonly|hidden)\b(?!=)'
+    return re.sub(bool_attrs, r'\1="true"', markup)
+
+
 def _sanitize_markup(markup: str) -> str:
     """Escape XML-special characters in text content of JS/event tags.
 
     AI agents often write descriptions like "超过10万<红色" or "A & B" inside
     <js-col>, <js-block>, <js-item>, <event> tags. These break XML parsing.
     This pre-processor escapes & and < in the text content of those tags.
+    Also fixes HTML boolean attributes for XML compatibility.
     """
+    markup = _fix_boolean_attrs(markup)
+
     def _escape_text(m: re.Match) -> str:
         opening = m.group(1)
         text = m.group(2)
@@ -86,82 +100,98 @@ def validate_grid_layout(dsl: str, context: str = "form") -> None:
     if not has_grid:
         raise ValueError(
             f"Bad {context} layout: {len(field_lines)} fields all single-column. "
-            f"MUST use grid layout — put related fields on the SAME LINE.\n"
-            f"Multiple <field> on the SAME LINE = side-by-side grid columns.\n\n"
+            f"MUST use <row> for grid layout.\n\n"
             f"Example:\n"
             f"  <section title=\"基本信息\">\n"
-            f"    <field name=\"employee_no\" required /><field name=\"name\" required />\n"
-            f"    <field name=\"gender\" /><field name=\"phone\" />\n"
+            f"    <row><field name=\"employee_no\" required /><field name=\"name\" required /></row>\n"
+            f"    <row><field name=\"gender\" /><field name=\"phone\" /></row>\n"
             f"    <field name=\"email\" />\n"
             f"  </section>\n"
             f"  <section title=\"工作信息\">\n"
-            f"    <field name=\"department_id\" /><field name=\"position_id\" />\n"
-            f"    <field name=\"entry_date\" /><field name=\"status\" />\n"
-            f"  </section>"
+            f"    <row><field name=\"department_id\" /><field name=\"position_id\" /></row>\n"
+            f"    <row><field name=\"entry_date\" /><field name=\"status\" /></row>\n"
+            f"  </section>\n\n"
+            f"Rules: <row> wraps fields that should be side-by-side. "
+            f"<field> outside <row> = full-width row."
         )
 
 
 def parse_form_html(markup: str) -> str:
     """Convert <form> HTML markup to fields DSL string.
 
-    Supports two styles within <section> blocks:
-    1. HTML: <field name="a" required /><field name="b" />
-    2. Inline DSL: a* | b
-
-    Multiple <field> or DSL entries on the same line → side-by-side (pipe).
-    Different lines → separate rows.
+    Uses standard <row> tags for grid layout:
+      - <row> wraps fields that should be side-by-side
+      - <field> outside <row> = full-width row
+      - <section title="X"> = visual group header
 
     Example input:
         <form>
           <section title="基本信息">
-            <field name="employee_no" required /><field name="name" required />
-            <field name="gender" /><field name="phone" />
+            <row><field name="employee_no" required /><field name="name" required /></row>
+            <row><field name="gender" /><field name="phone" /></row>
             <field name="email" />
           </section>
           <section title="工作信息">
-            department_id | position_id
-            entry_date | status
+            <row><field name="department_id" /><field name="position_id" /></row>
+            <row><field name="entry_date" /><field name="status" /></row>
           </section>
         </form>
 
     Returns:
         "--- 基本信息\\nemployee_no* | name*\\ngender | phone\\nemail\\n--- 工作信息\\n..."
     """
-    _field_re = re.compile(r'<field\s+name="([^"]+)"([^/]*)/>')
-    _section_re = re.compile(r'<section\s+title="([^"]+)"')
-    _skip = {'<form>', '</form>', '</form >', '</section>', '</section >'}
+    markup = _fix_boolean_attrs(markup)
+    root = ET.fromstring(markup)
+    if root.tag != "form":
+        raise ValueError(f"Root element must be <form>, got <{root.tag}>")
 
     lines: list[str] = []
-    for raw in markup.strip().splitlines():
-        stripped = raw.strip()
-        if not stripped or stripped.lower() in _skip:
-            continue
-
-        # Section header
-        sm = _section_re.search(stripped)
-        if sm:
-            lines.append(f"--- {sm.group(1)}")
-
-        # HTML <field> tags
-        fields = _field_re.findall(stripped)
-        if fields:
-            parts = [f"{n}{'*' if 'required' in r else ''}" for n, r in fields]
-            lines.append(' | '.join(parts))
-        elif not stripped.startswith('<'):
-            # Inline DSL text (not an HTML tag)
-            lines.append(stripped)
-
+    _process_form_children(root, lines)
     return '\n'.join(lines)
+
+
+def _process_form_children(parent: ET.Element, lines: list[str]) -> None:
+    """Recursively process form children into DSL lines."""
+    for el in parent:
+        if el.tag == "section":
+            title = el.get("title", "")
+            if title:
+                lines.append(f"--- {title}")
+            _process_form_children(el, lines)
+
+        elif el.tag == "row":
+            # All <field> children are side-by-side
+            fields = []
+            for child in el:
+                if child.tag == "field":
+                    fields.append(_field_to_dsl(child))
+            if fields:
+                lines.append(' | '.join(fields))
+
+        elif el.tag == "field":
+            # Single field = full-width row
+            lines.append(_field_to_dsl(el))
+
+
+def _field_to_dsl(el: ET.Element) -> str:
+    """Convert a <field> element to DSL token: 'name' or 'name*'."""
+    name = el.get("name", "")
+    required = "required" in el.attrib
+    return f"{name}*" if required else name
 
 
 def parse_detail_html(markup: str) -> list[dict]:
     """Convert <detail> HTML markup to tab definitions list.
 
+    Uses <row> for grid layout, same as form markup.
+
     Example input:
         <detail>
-          <tab title="基本信息">
-            <field name="employee_no" /><field name="name" />
-            <field name="gender" /><field name="phone" />
+          <tab title="概况">
+            <section title="基本信息">
+              <row><field name="employee_no" /><field name="name" /></row>
+              <row><field name="gender" /><field name="phone" /></row>
+            </section>
             <js-item title="画像">等级标签+状态</js-item>
           </tab>
           <tab title="考勤" assoc="attendance" collection="nb_hrm_attendance"
@@ -170,107 +200,76 @@ def parse_detail_html(markup: str) -> list[dict]:
 
     Returns:
         [
-            {"title": "基本信息", "fields": "employee_no | name\\ngender | phone",
+            {"title": "概况", "fields": "--- 基本信息\\nemployee_no | name\\ngender | phone",
              "js_items": [{"title": "画像", "desc": "等级标签+状态"}]},
             {"title": "考勤", "assoc": "attendance", "coll": "nb_hrm_attendance",
              "fields": ["date", "status", "check_in"]}
         ]
     """
     markup = _sanitize_markup(markup)
-
-    _attr_re = re.compile(r'([\w-]+)="([^"]*)"')
-    _tab_self = re.compile(r'<tab\b([^>]*)/>',  re.IGNORECASE)
-    _tab_open = re.compile(r'<tab\b([^>]*)>',   re.IGNORECASE)
-    _tab_close = re.compile(r'</tab>',           re.IGNORECASE)
-    _field_re = re.compile(r'<field\s+name="([^"]+)"([^/]*)/>')
-    _js_item_re = re.compile(
-        r'<js-item\s+title="([^"]+)">(.*?)</js-item>', re.DOTALL)
-    _subtable_re = re.compile(r'<(?:sub)?table\b([^/]*)/?>')
+    root = ET.fromstring(markup)
+    if root.tag != "detail":
+        raise ValueError(f"Root element must be <detail>, got <{root.tag}>")
 
     tabs: list[dict] = []
-    in_tab = False
-    tab_attrs: dict = {}
-    tab_lines: list[str] = []
-
-    for raw in markup.strip().splitlines():
-        line = raw.strip()
-        if not line or line.lower().startswith(('<detail', '</detail')):
+    for tab_el in root:
+        if tab_el.tag != "tab":
             continue
-
-        if not in_tab:
-            # Self-closing tab
-            m = _tab_self.search(line)
-            if m:
-                attrs = dict(_attr_re.findall(m.group(1)))
-                tabs.append(_build_tab_def(attrs, [], _field_re, _js_item_re,
-                                           _subtable_re, _attr_re))
-                continue
-            # Opening tab
-            m = _tab_open.search(line)
-            if m:
-                in_tab = True
-                tab_attrs = dict(_attr_re.findall(m.group(1)))
-                tab_lines = []
-                continue
-        else:
-            if _tab_close.search(line):
-                tabs.append(_build_tab_def(tab_attrs, tab_lines, _field_re,
-                                           _js_item_re, _subtable_re, _attr_re))
-                in_tab = False
-                continue
-            tab_lines.append(line)
+        tabs.append(_build_tab_def_xml(tab_el))
 
     return tabs
 
 
-def _build_tab_def(
-    attrs: dict, content_lines: list[str],
-    _field_re: re.Pattern, _js_item_re: re.Pattern,
-    _subtable_re: re.Pattern, _attr_re: re.Pattern,
-) -> dict:
-    """Build a single tab definition from parsed attributes and content lines."""
-    tab: dict = {"title": attrs.get("title", "Tab")}
+def _build_tab_def_xml(tab_el: ET.Element) -> dict:
+    """Build a single tab definition from a <tab> XML element."""
+    tab: dict = {"title": tab_el.get("title", "Tab")}
 
     # Subtable tab (has assoc attribute)
-    if attrs.get("assoc"):
-        tab["assoc"] = attrs["assoc"]
-        tab["coll"] = attrs.get("collection", "")
-        fields_str = attrs.get("fields", "")
+    if tab_el.get("assoc"):
+        tab["assoc"] = tab_el.get("assoc", "")
+        tab["coll"] = tab_el.get("collection", "")
+        fields_str = tab_el.get("fields", "")
         tab["fields"] = [f.strip() for f in fields_str.split(",") if f.strip()]
         return tab
 
-    # Field-based tab
-    content = '\n'.join(content_lines)
-    field_rows: list[str] = []
+    # Field-based tab: parse children into DSL lines
+    field_lines: list[str] = []
     js_items: list[dict] = []
-    _section_re = re.compile(r'<section\s+title="([^"]+)"')
 
-    # Extract js-items from full content
-    for jm in _js_item_re.finditer(content):
-        js_items.append({"title": jm.group(1), "desc": jm.group(2).strip()})
+    _parse_detail_tab_children(tab_el, field_lines, js_items)
 
-    # Extract fields line-by-line
-    for line in content_lines:
-        # Section headers → DSL dividers
-        sm = _section_re.search(line)
-        if sm:
-            field_rows.append(f"--- {sm.group(1)}")
-
-        fields = _field_re.findall(line)
-        if fields:
-            parts = [n for n, _ in fields]
-            field_rows.append(' | '.join(parts))
-        elif not line.startswith('<') and line.strip():
-            # Inline DSL text
-            field_rows.append(line.strip())
-
-    fields_dsl = '\n'.join(field_rows) if field_rows else attrs.get("fields", "")
-    tab["fields"] = fields_dsl
-
+    tab["fields"] = '\n'.join(field_lines)
     if js_items:
         tab["js_items"] = js_items
 
     return tab
+
+
+def _parse_detail_tab_children(
+    parent: ET.Element, field_lines: list[str], js_items: list[dict]
+) -> None:
+    """Recursively parse tab/section children into DSL lines and js_items."""
+    for el in parent:
+        if el.tag == "section":
+            title = el.get("title", "")
+            if title:
+                field_lines.append(f"--- {title}")
+            _parse_detail_tab_children(el, field_lines, js_items)
+
+        elif el.tag == "row":
+            # All <field> children are side-by-side
+            fields = [_field_to_dsl(f) for f in el if f.tag == "field"]
+            if fields:
+                field_lines.append(' | '.join(fields))
+
+        elif el.tag == "field":
+            # Single field = full-width row
+            field_lines.append(_field_to_dsl(el))
+
+        elif el.tag == "js-item":
+            title = el.get("title", "JS Item")
+            desc = (el.text or "").strip()
+            js_items.append({"title": title, "desc": desc})
 
 
 class PageMarkupParser:

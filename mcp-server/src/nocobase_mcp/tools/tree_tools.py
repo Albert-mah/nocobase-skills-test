@@ -691,29 +691,25 @@ def register_tools(mcp: FastMCP):
 
         Uses HTML markup to define form structure with grid layout.
 
-        GRID LAYOUT IS MANDATORY:
-          Multiple <field> on the SAME LINE = side-by-side columns (grid).
-          <field> on separate lines = separate rows.
-          Forms with >3 fields MUST have grid layout (will be rejected otherwise).
+        GRID LAYOUT IS MANDATORY — forms with >3 fields MUST use <row>.
 
         Format:
             <form>
               <section title="基本信息">
-                <field name="name" required /><field name="code" required />
-                <field name="status" /><field name="industry" />
+                <row><field name="name" required /><field name="code" required /></row>
+                <row><field name="status" /><field name="industry" /></row>
               </section>
               <section title="联系方式">
-                <field name="phone" /><field name="email" />
+                <row><field name="phone" /><field name="email" /></row>
               </section>
             </form>
 
         Rules:
           - <form> root wrapper (required)
-          - <section title="X"> creates a visual divider/group header
-          - <field name="X" /> defines a form field
+          - <section title="X"> visual divider/group header
+          - <row> wraps fields that should be side-by-side (grid columns)
+          - <field> outside <row> = full-width row
           - <field ... required /> marks field as mandatory
-          - Same line = side-by-side grid | Separate lines = separate rows
-          - Every form SHOULD have <section> grouping for readability
 
         Args:
             table_uid: TableBlockModel UID (from nb_auto_forms or nb_inspect_all)
@@ -747,17 +743,17 @@ def register_tools(mcp: FastMCP):
 
         Uses HTML markup to define detail popup with tabs and grid layout.
 
-        GRID LAYOUT IS MANDATORY for field tabs (same rules as nb_set_form).
+        GRID LAYOUT IS MANDATORY — field tabs with >3 fields MUST use <row>.
 
         Format:
             <detail>
               <tab title="概况">
                 <section title="基本信息">
-                  <field name="name" /><field name="code" />
-                  <field name="status" /><field name="industry" />
+                  <row><field name="name" /><field name="code" /></row>
+                  <row><field name="status" /><field name="industry" /></row>
                 </section>
                 <section title="联系方式">
-                  <field name="phone" /><field name="email" />
+                  <row><field name="phone" /><field name="email" /></row>
                 </section>
                 <js-item title="画像">等级标签+状态+来源</js-item>
               </tab>
@@ -770,7 +766,8 @@ def register_tools(mcp: FastMCP):
           - Tab 1 = ALL main-table fields (use <section> for grouping) + js_items
           - Tab 2+ = ONLY association subtables via assoc attribute
           - NEVER split same-table fields into multiple tabs
-          - <field> same line = side-by-side grid | separate lines = separate rows
+          - <row> wraps fields that should be side-by-side
+          - <field> outside <row> = full-width row
           - <js-item> becomes a JS placeholder (implement via nb_inject_js later)
           - Self-closing <tab .../> for subtable tabs (assoc + collection + fields)
 
