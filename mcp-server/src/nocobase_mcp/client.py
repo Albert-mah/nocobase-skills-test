@@ -2464,14 +2464,15 @@ class NB:
                 f"String operators: $includes, $eq, $ne."
             )
 
-        # Validate: direct DOM manipulation — must use ctx.render() instead
-        if re.search(r'document\.(createElement|getElementById|querySelector|body|head)', code) or "innerHTML" in code:
+        # Validate: innerHTML on ctx.element is deprecated — use ctx.render() instead
+        # NOTE: document.createElement IS valid (used by ECharts/Chart.js pattern:
+        #   container = document.createElement('div'); ctx.render(container); chart.init(container))
+        if "ctx.element.innerHTML" in code or "element.innerHTML" in code:
             raise ValueError(
-                f"Rejected code for {uid_}: Direct DOM manipulation (document.createElement / innerHTML) "
-                f"is NOT allowed in NocoBase JS sandbox. "
-                f"Use ctx.render(h('div', ...)) to output content. "
-                f"'h' = ctx.React.createElement. Build your entire UI as React elements. "
-                f"See js-patterns.md for correct rendering patterns."
+                f"Rejected code for {uid_}: ctx.element.innerHTML is deprecated. "
+                f"Use ctx.render(content) instead. Supports JSX, DOM nodes, and HTML strings. "
+                f"For ECharts: document.createElement('div') + ctx.render(container) + echarts.init(container). "
+                f"See ref/js-patterns.md and ref/js-sandbox.md."
             )
 
         return self.update_js(uid_, code)
