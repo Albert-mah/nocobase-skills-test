@@ -689,9 +689,14 @@ def register_tools(mcp: FastMCP):
                     events_json: Optional[list] = None) -> str:
         """Replace a table's addnew or edit form with new field layout.
 
-        Accepts HTML markup (recommended) or legacy DSL string (auto-detected).
+        Uses HTML markup to define form structure with grid layout.
 
-        HTML format (recommended):
+        GRID LAYOUT IS MANDATORY:
+          Multiple <field> on the SAME LINE = side-by-side columns (grid).
+          <field> on separate lines = separate rows.
+          Forms with >3 fields MUST have grid layout (will be rejected otherwise).
+
+        Format:
             <form>
               <section title="基本信息">
                 <field name="name" required /><field name="code" required />
@@ -703,26 +708,17 @@ def register_tools(mcp: FastMCP):
             </form>
 
         Rules:
+          - <form> root wrapper (required)
           - <section title="X"> creates a visual divider/group header
-          - Multiple <field> on the SAME LINE = side-by-side (2 columns)
-          - <field> on separate lines = separate rows
-          - required attribute = mandatory field
-
-        Also supports inline DSL within sections:
-            <form>
-              <section title="基本信息">
-                name* | code*
-                status | industry
-              </section>
-            </form>
-
-        Legacy DSL format (still supported):
-            "--- 基本信息\\nname*|code\\nstatus|industry"
+          - <field name="X" /> defines a form field
+          - <field ... required /> marks field as mandatory
+          - Same line = side-by-side grid | Separate lines = separate rows
+          - Every form SHOULD have <section> grouping for readability
 
         Args:
             table_uid: TableBlockModel UID (from nb_auto_forms or nb_inspect_all)
             form_type: "addnew" or "edit"
-            markup: HTML markup or legacy DSL string
+            markup: HTML markup string
             events_json: Optional event placeholder definitions:
                 [{"on": "formValuesChange", "desc": "当stage变化时自动映射probability"}]
 
@@ -749,37 +745,38 @@ def register_tools(mcp: FastMCP):
     def nb_set_detail(table_uid: str, markup: str) -> str:
         """Replace a table's detail popup with new tab structure.
 
-        Accepts HTML markup (recommended) or legacy JSON array (auto-detected).
+        Uses HTML markup to define detail popup with tabs and grid layout.
 
-        HTML format (recommended):
+        GRID LAYOUT IS MANDATORY for field tabs (same rules as nb_set_form).
+
+        Format:
             <detail>
               <tab title="概况">
-                <field name="name" /><field name="code" />
-                <field name="status" /><field name="industry" />
-                <field name="phone" /><field name="email" />
+                <section title="基本信息">
+                  <field name="name" /><field name="code" />
+                  <field name="status" /><field name="industry" />
+                </section>
+                <section title="联系方式">
+                  <field name="phone" /><field name="email" />
+                </section>
                 <js-item title="画像">等级标签+状态+来源</js-item>
               </tab>
               <tab title="联系人" assoc="contacts"
                    collection="nb_crm_contacts" fields="name,phone,position" />
-              <tab title="商机" assoc="opportunities"
-                   collection="nb_crm_opportunities" fields="title,stage,amount" />
             </detail>
 
         Rules:
-          - Tab 1 = ALL main-table fields + js_items (use <section> inside if grouping needed)
-          - Tab 2+ = ONLY association subtables (o2m/m2m) via assoc attribute
+          - <detail> root wrapper (required)
+          - Tab 1 = ALL main-table fields (use <section> for grouping) + js_items
+          - Tab 2+ = ONLY association subtables via assoc attribute
           - NEVER split same-table fields into multiple tabs
-          - <field> on same line = side-by-side, separate lines = separate rows
+          - <field> same line = side-by-side grid | separate lines = separate rows
           - <js-item> becomes a JS placeholder (implement via nb_inject_js later)
-          - Self-closing <tab .../> for subtable tabs (must have assoc + collection + fields)
-
-        Legacy JSON format (still supported):
-            [{"title": "概况", "fields": "DSL", "js_items": [...]},
-             {"title": "联系人", "assoc": "contacts", "coll": "...", "fields": [...]}]
+          - Self-closing <tab .../> for subtable tabs (assoc + collection + fields)
 
         Args:
             table_uid: TableBlockModel UID
-            markup: HTML markup string or JSON array string
+            markup: HTML markup string
 
         Returns:
             JSON with tab count, type, node_count.

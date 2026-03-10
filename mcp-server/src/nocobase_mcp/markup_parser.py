@@ -61,63 +61,44 @@ def _sanitize_markup(markup: str) -> str:
     return re.sub(pattern, _escape_text, markup, flags=re.DOTALL)
 
 
-def enforce_grid_layout(dsl: str) -> str:
-    """Enforce grid layout: auto-pair single-column fields into 2 per row.
+def validate_grid_layout(dsl: str, context: str = "form") -> None:
+    """Validate that fields DSL uses grid layout (pipe syntax for side-by-side).
 
-    If a DSL string has fields all on single rows (no pipe separators),
-    pairs them 2-by-2. Section headers (---) and already-paired rows
-    are preserved as-is.
+    Raises ValueError if more than 3 field rows exist but none use pipe
+    separators — this means all fields are single-column, which is bad layout.
 
-    Before:
-        --- 基本信息
-        employee_no
-        name
-        gender
-        phone
-        email
-
-    After:
-        --- 基本信息
-        employee_no | name
-        gender | phone
-        email
+    Args:
+        dsl: Fields DSL string
+        context: "form" or "detail" for error message
     """
     if not dsl or not dsl.strip():
-        return dsl
+        return
 
-    lines = dsl.split('\n')
-    result: list[str] = []
-    pending: str | None = None
+    lines = dsl.strip().split('\n')
+    field_lines = [l for l in lines
+                   if l.strip() and not l.strip().startswith('---')
+                   and not l.strip().startswith('#')]
 
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
+    if len(field_lines) <= 3:
+        return  # Too few fields to enforce
 
-        if stripped.startswith('---') or stripped.startswith('#'):
-            # Section header / markdown — flush pending first
-            if pending:
-                result.append(pending)
-                pending = None
-            result.append(stripped)
-        elif '|' in stripped:
-            # Already has pipe — grid layout present, keep as-is
-            if pending:
-                result.append(pending)
-                pending = None
-            result.append(stripped)
-        else:
-            # Single field — pair with next
-            if pending:
-                result.append(f"{pending} | {stripped}")
-                pending = None
-            else:
-                pending = stripped
-
-    if pending:
-        result.append(pending)
-
-    return '\n'.join(result)
+    has_grid = any('|' in l for l in field_lines)
+    if not has_grid:
+        raise ValueError(
+            f"Bad {context} layout: {len(field_lines)} fields all single-column. "
+            f"MUST use grid layout — put related fields on the SAME LINE.\n"
+            f"Multiple <field> on the SAME LINE = side-by-side grid columns.\n\n"
+            f"Example:\n"
+            f"  <section title=\"基本信息\">\n"
+            f"    <field name=\"employee_no\" required /><field name=\"name\" required />\n"
+            f"    <field name=\"gender\" /><field name=\"phone\" />\n"
+            f"    <field name=\"email\" />\n"
+            f"  </section>\n"
+            f"  <section title=\"工作信息\">\n"
+            f"    <field name=\"department_id\" /><field name=\"position_id\" />\n"
+            f"    <field name=\"entry_date\" /><field name=\"status\" />\n"
+            f"  </section>"
+        )
 
 
 def parse_form_html(markup: str) -> str:
