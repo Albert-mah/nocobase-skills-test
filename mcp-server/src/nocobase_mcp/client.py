@@ -1688,6 +1688,43 @@ class NB:
                     return f["uid"]
         return None
 
+    def _enable_first_click(self, table_uid: str, coll: str,
+                             all_models: list) -> str | None:
+        """Auto-enable clickToOpen on the first column's DisplayFieldModel.
+
+        When a page is rebuilt (e.g. via nb_compose_page), JS columns may replace
+        the original first column, losing the clickToOpen setting. This method
+        finds the first TableColumnModel with a DisplayFieldModel child and
+        enables clickToOpen + popupSettings on it.
+
+        Returns the DisplayFieldModel UID, or None if no suitable column found.
+        """
+        cols = [m for m in all_models
+                if m.get("parentId") == table_uid
+                and m.get("use") == "TableColumnModel"]
+        cols.sort(key=lambda m: m.get("sortIndex", 999))
+        for col in cols:
+            fields = [m for m in all_models
+                      if m.get("parentId") == col["uid"]
+                      and "FieldModel" in m.get("use", "")
+                      and "Display" in m.get("use", "")]
+            if fields:
+                f = fields[0]
+                # Enable clickToOpen + popupSettings
+                self.update(f["uid"], {"stepParams": {
+                    "displayFieldSettings": {"clickToOpen": {"clickToOpen": True}},
+                    "popupSettings": {"openView": {
+                        "collectionName": coll, "dataSourceKey": "main",
+                        "mode": "drawer", "size": "large",
+                        "pageModelClass": "ChildPageModel", "uid": f["uid"],
+                    }},
+                }})
+                self.warnings.append(
+                    f"auto-enabled clickToOpen on {f['use']} ({f['uid']}) "
+                    f"for detail popup attachment")
+                return f["uid"]
+        return None
+
     def set_form(self, table_uid: str, form_type: str, markup: str,
                  events: list | None = None) -> dict:
         """Replace a table's addnew or edit form with new field layout.
@@ -1860,10 +1897,14 @@ class NB:
 
         self._load_meta(coll)
 
-        # Find click field
+        # Find click field — or auto-enable on first column if none exists
         click_uid = self._find_click_field_uid(table_uid, all_models)
         if not click_uid:
-            raise ValueError(f"No click field (first column with clickToOpen) found under {table_uid}")
+            click_uid = self._enable_first_click(table_uid, coll, all_models)
+        if not click_uid:
+            raise ValueError(
+                f"No column with DisplayFieldModel found under table {table_uid}. "
+                f"Cannot attach detail popup.")
 
         # Destroy old ChildPageModel
         old_cp = self._find_child_uid(click_uid, "ChildPageModel", all_models)
