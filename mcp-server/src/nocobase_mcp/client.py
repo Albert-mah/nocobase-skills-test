@@ -1670,19 +1670,27 @@ class NB:
                     return f["uid"]
         return None
 
-    def set_form(self, table_uid: str, form_type: str, fields_dsl: str,
+    def set_form(self, table_uid: str, form_type: str, markup: str,
                  events: list | None = None) -> dict:
         """Replace a table's addnew or edit form with new field layout.
 
-        1. Finds the action node (AddNewActionModel or EditActionModel)
-        2. Destroys old ChildPageModel subtree
-        3. Builds new form tree with fields DSL
-        4. Saves new subtree
+        Accepts either HTML markup or legacy DSL string (auto-detected).
+
+        HTML format:
+            <form>
+              <section title="基本信息">
+                <field name="employee_no" required /><field name="name" required />
+                <field name="gender" /><field name="phone" />
+              </section>
+            </form>
+
+        Legacy DSL format:
+            "--- 基本信息\\nemployee_no*|name*\\ngender|phone"
 
         Args:
             table_uid: TableBlockModel UID
             form_type: "addnew" or "edit"
-            fields_dsl: Fields DSL string (supports sections, side-by-side, required)
+            markup: HTML markup or DSL string
             events: Optional event placeholder defs:
                 [{"on": "formValuesChange", "desc": "..."}]
 
@@ -1690,6 +1698,12 @@ class NB:
             dict with form_uid, type, node_count
         """
         from .tree_builder import TreeBuilder
+        from .markup_parser import parse_form_html
+
+        # Auto-detect: HTML if contains <form> or <field, otherwise DSL
+        fields_dsl = markup
+        if '<form' in markup or '<field' in markup or '<section' in markup:
+            fields_dsl = parse_form_html(markup)
 
         all_models = self._list_all()
         coll = self._get_table_collection(table_uid, all_models)
@@ -1777,26 +1791,46 @@ class NB:
                     return found
         return None
 
-    def set_detail(self, table_uid: str, detail_json: list) -> dict:
+    def set_detail(self, table_uid: str, markup_or_json) -> dict:
         """Replace a table's detail popup with new tab structure.
 
-        1. Finds the click field (DisplayFieldModel with clickToOpen)
-        2. Destroys old ChildPageModel subtree
-        3. Builds new detail popup with tabs
-        4. Saves new subtree
+        Accepts either HTML markup string or legacy JSON tab definitions
+        (auto-detected).
+
+        HTML format:
+            <detail>
+              <tab title="基本信息">
+                <field name="employee_no" /><field name="name" />
+                <js-item title="画像">等级标签+状态</js-item>
+              </tab>
+              <tab title="考勤" assoc="attendance"
+                   collection="nb_hrm_attendance" fields="date,status" />
+            </detail>
+
+        Legacy JSON format:
+            [{"title": "基本信息", "fields": "DSL"}, ...]
 
         Args:
             table_uid: TableBlockModel UID
-            detail_json: Array of tab definitions:
-                - Fields tab: {"title": "Info", "fields": "DSL",
-                    "js_items": [{"title": "Summary", "desc": "..."}]}
-                - Subtable tab: {"title": "Contacts", "assoc": "contacts",
-                    "coll": "nb_crm_contacts", "fields": ["name","phone"]}
+            markup_or_json: HTML markup string or list of tab definitions
 
         Returns:
             dict with tab count, type, node_count
         """
         from .tree_builder import TreeBuilder
+        from .markup_parser import parse_detail_html
+
+        # Auto-detect: HTML string with <detail or <tab → parse as HTML
+        if isinstance(markup_or_json, str) and ('<detail' in markup_or_json or '<tab' in markup_or_json):
+            detail_json = parse_detail_html(markup_or_json)
+        elif isinstance(markup_or_json, list):
+            detail_json = markup_or_json
+        elif isinstance(markup_or_json, str):
+            # Try JSON parse
+            import json
+            detail_json = json.loads(markup_or_json)
+        else:
+            raise ValueError("markup_or_json must be HTML string or list of tab defs")
 
         all_models = self._list_all()
         coll = self._get_table_collection(table_uid, all_models)

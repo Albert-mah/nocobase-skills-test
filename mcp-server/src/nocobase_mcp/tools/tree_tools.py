@@ -193,11 +193,13 @@ def register_tools(mcp: FastMCP):
             "results": results,
         })
 
-    # ── XML Markup tools ──────────────────────────────────────
+    # ── Page Markup tools ─────────────────────────────────────
 
     @mcp.tool()
-    def nb_page_markup(tab_uid: str, markup: str) -> str:
-        """Build a page from XML markup. JS nodes are description-only placeholders.
+    def nb_page(tab_uid: str, markup: str) -> str:
+        """Build a page from HTML-like markup. JS nodes are description-only placeholders.
+
+        Alias: nb_page_markup (deprecated, use nb_page instead).
 
         LAYOUT RULE: Every non-reference page MUST use <row> with span for
         side-by-side layout. Table left (span=14-18) + sidebar right (span=6-10).
@@ -205,7 +207,7 @@ def register_tools(mcp: FastMCP):
         full-width — that makes pages look like a plain CRUD list.
 
         Two-phase workflow:
-          Phase 1: Write XML markup → nb_page_markup() → page with JS placeholders
+          Phase 1: Write XML markup → nb_page() → page with JS placeholders
           Phase 2: nb_find_placeholders() → nb_inject_js() per placeholder
 
         Args:
@@ -327,7 +329,7 @@ def register_tools(mcp: FastMCP):
                     results.append({"index": i, "error": "Missing tab_uid or markup"})
                     continue
 
-                r = nb_page_markup(tab_uid=tab, markup=markup)
+                r = nb_page(tab_uid=tab, markup=markup)
                 parsed = json.loads(r)
                 parsed["index"] = i
                 results.append(parsed)
@@ -371,7 +373,7 @@ def register_tools(mcp: FastMCP):
 
         Example workflow:
             # Phase 1: Build page with placeholders
-            nb_page_markup(tab_uid, "<page>...</page>")
+            nb_page(tab_uid, "<page>...</page>")
 
             # Phase 2: Find and implement each JS
             placeholders = nb_find_placeholders("CRM")
@@ -536,7 +538,7 @@ def register_tools(mcp: FastMCP):
         and writes ready-to-inject files. Blocks/items/events get stub files.
 
         Workflow:
-          1. nb_page_markup(...) → build pages with placeholders
+          1. nb_page(...) → build pages with placeholders
           2. nb_auto_js("CRM") → auto-generate JS files
           3. Implement remaining [todo] files manually
           4. nb_inject_js_dir("js/") → deploy all JS files
@@ -683,29 +685,49 @@ def register_tools(mcp: FastMCP):
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
-    def nb_set_form(table_uid: str, form_type: str, fields_dsl: str,
+    def nb_set_form(table_uid: str, form_type: str, markup: str,
                     events_json: Optional[list] = None) -> str:
         """Replace a table's addnew or edit form with new field layout.
 
-        Destroys the old form and builds a new one with the given fields DSL.
-        Supports sections (--- Title), side-by-side fields (a | b), and
-        required markers (name*).
+        Accepts HTML markup (recommended) or legacy DSL string (auto-detected).
+
+        HTML format (recommended):
+            <form>
+              <section title="基本信息">
+                <field name="name" required /><field name="code" required />
+                <field name="status" /><field name="industry" />
+              </section>
+              <section title="联系方式">
+                <field name="phone" /><field name="email" />
+              </section>
+            </form>
+
+        Rules:
+          - <section title="X"> creates a visual divider/group header
+          - Multiple <field> on the SAME LINE = side-by-side (2 columns)
+          - <field> on separate lines = separate rows
+          - required attribute = mandatory field
+
+        Also supports inline DSL within sections:
+            <form>
+              <section title="基本信息">
+                name* | code*
+                status | industry
+              </section>
+            </form>
+
+        Legacy DSL format (still supported):
+            "--- 基本信息\\nname*|code\\nstatus|industry"
 
         Args:
             table_uid: TableBlockModel UID (from nb_auto_forms or nb_inspect_all)
             form_type: "addnew" or "edit"
-            fields_dsl: Fields DSL string. Example:
-                "--- 基本信息\\nname*|code\\nstatus|industry\\n--- 联系方式\\nphone|email"
+            markup: HTML markup or legacy DSL string
             events_json: Optional event placeholder definitions:
                 [{"on": "formValuesChange", "desc": "当stage变化时自动映射probability"}]
 
         Returns:
             JSON with form_uid, type, node_count.
-
-        Example:
-            nb_set_form("tbl123", "addnew",
-                "--- 基本信息\\nname*|code\\nstatus|industry\\n--- 联系方式\\nphone|email",
-                [{"on": "formValuesChange", "desc": "industry变化时推荐grade"}])
         """
         nb = get_nb_client()
         try:
@@ -716,7 +738,7 @@ def register_tools(mcp: FastMCP):
                 else:
                     events = events_json
 
-            result = nb.set_form(table_uid, form_type, fields_dsl, events)
+            result = nb.set_form(table_uid, form_type, markup, events)
             if nb.warnings:
                 result["warnings"] = nb.warnings
             return json.dumps(result, ensure_ascii=False)
@@ -724,49 +746,59 @@ def register_tools(mcp: FastMCP):
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
-    def nb_set_detail(table_uid: str, detail_json: list) -> str:
+    def nb_set_detail(table_uid: str, markup: str) -> str:
         """Replace a table's detail popup with new tab structure.
 
-        Destroys the old detail popup and builds a new one with tabs.
+        Accepts HTML markup (recommended) or legacy JSON array (auto-detected).
 
-        CRITICAL TAB RULE:
-          Tab 1 = ALL main-table fields (use --- Section to group) + js_items.
-          Tab 2+ = ONLY association subtables (o2m/m2m relations).
-          NEVER split same-table fields into multiple tabs.
-          ❌ Wrong: tab1="基本信息" tab2="联系方式" tab3="工作信息" (same table!)
-          ✅ Right: tab1="概况" with "--- 基本信息\\n...\\n--- 联系方式\\n...\\n--- 工作信息\\n..."
+        HTML format (recommended):
+            <detail>
+              <tab title="概况">
+                <field name="name" /><field name="code" />
+                <field name="status" /><field name="industry" />
+                <field name="phone" /><field name="email" />
+                <js-item title="画像">等级标签+状态+来源</js-item>
+              </tab>
+              <tab title="联系人" assoc="contacts"
+                   collection="nb_crm_contacts" fields="name,phone,position" />
+              <tab title="商机" assoc="opportunities"
+                   collection="nb_crm_opportunities" fields="title,stage,amount" />
+            </detail>
+
+        Rules:
+          - Tab 1 = ALL main-table fields + js_items (use <section> inside if grouping needed)
+          - Tab 2+ = ONLY association subtables (o2m/m2m) via assoc attribute
+          - NEVER split same-table fields into multiple tabs
+          - <field> on same line = side-by-side, separate lines = separate rows
+          - <js-item> becomes a JS placeholder (implement via nb_inject_js later)
+          - Self-closing <tab .../> for subtable tabs (must have assoc + collection + fields)
+
+        Legacy JSON format (still supported):
+            [{"title": "概况", "fields": "DSL", "js_items": [...]},
+             {"title": "联系人", "assoc": "contacts", "coll": "...", "fields": [...]}]
 
         Args:
             table_uid: TableBlockModel UID
-            detail_json: Array of tab definitions. Each tab:
-                - Fields tab (first tab — put ALL fields here):
-                    {"title": "概况",
-                     "fields": "--- 基本信息\\nname|code\\n--- 联系方式\\nphone|email",
-                     "js_items": [{"title": "画像", "desc": "等级标签+状态+来源"}]}
-                - Subtable tab (only for o2m relations):
-                    {"title": "联系人", "assoc": "contacts",
-                     "coll": "nb_crm_contacts", "fields": ["name","phone"]}
-
-            js_items become JS placeholders — implement via nb_inject_js in Phase 2.
+            markup: HTML markup string or JSON array string
 
         Returns:
             JSON with tab count, type, node_count.
-
-        Example:
-            nb_set_detail("tbl123", [
-                {"title": "概况",
-                 "fields": "--- 基本信息\\nname|code\\nstatus|industry\\n--- 联系方式\\nphone|email",
-                 "js_items": [{"title": "画像", "desc": "等级标签+状态"}]},
-                {"title": "联系人", "assoc": "contacts",
-                 "coll": "nb_crm_contacts", "fields": ["name","phone"]}
-            ])
         """
         nb = get_nb_client()
         try:
-            if isinstance(detail_json, str):
-                detail_json = safe_json(detail_json)
+            # Auto-detect format
+            if isinstance(markup, str) and ('<detail' in markup or '<tab' in markup):
+                from ..markup_parser import parse_detail_html
+                detail_json = parse_detail_html(markup)
+            elif isinstance(markup, list):
+                detail_json = markup
+            elif isinstance(markup, str):
+                detail_json = safe_json(markup)
+            else:
+                return json.dumps({"error": "markup must be HTML string or JSON array"})
+
             if not isinstance(detail_json, list):
-                return json.dumps({"error": "detail_json must be a JSON array"})
+                return json.dumps({"error": "Parsed result must be a list of tab definitions"})
 
             # Validate tab structure: warn if multiple tabs all lack assoc (same-table split)
             field_only_tabs = [t for t in detail_json
@@ -777,10 +809,8 @@ def register_tools(mcp: FastMCP):
                     "error": (
                         f"Bad tab structure: {len(field_only_tabs)} tabs without subtable "
                         f"association ({', '.join(tab_titles)}). "
-                        f"Same-table fields must be in ONE tab using --- Section headers "
-                        f"to group them. Only o2m/m2m subtables get their own tabs. "
-                        f"Fix: merge [{', '.join(tab_titles)}] into a single '概况' tab "
-                        f"with '--- {tab_titles[0]}\\n...\\n--- {tab_titles[1]}\\n...' sections."
+                        f"Same-table fields must be in ONE tab using <section> to group. "
+                        f"Only o2m/m2m subtables get their own tabs."
                     )
                 })
 

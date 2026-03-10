@@ -61,6 +61,178 @@ def _sanitize_markup(markup: str) -> str:
     return re.sub(pattern, _escape_text, markup, flags=re.DOTALL)
 
 
+def parse_form_html(markup: str) -> str:
+    """Convert <form> HTML markup to fields DSL string.
+
+    Supports two styles within <section> blocks:
+    1. HTML: <field name="a" required /><field name="b" />
+    2. Inline DSL: a* | b
+
+    Multiple <field> or DSL entries on the same line → side-by-side (pipe).
+    Different lines → separate rows.
+
+    Example input:
+        <form>
+          <section title="基本信息">
+            <field name="employee_no" required /><field name="name" required />
+            <field name="gender" /><field name="phone" />
+            <field name="email" />
+          </section>
+          <section title="工作信息">
+            department_id | position_id
+            entry_date | status
+          </section>
+        </form>
+
+    Returns:
+        "--- 基本信息\\nemployee_no* | name*\\ngender | phone\\nemail\\n--- 工作信息\\n..."
+    """
+    _field_re = re.compile(r'<field\s+name="([^"]+)"([^/]*)/>')
+    _section_re = re.compile(r'<section\s+title="([^"]+)"')
+    _skip = {'<form>', '</form>', '</form >', '</section>', '</section >'}
+
+    lines: list[str] = []
+    for raw in markup.strip().splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.lower() in _skip:
+            continue
+
+        # Section header
+        sm = _section_re.search(stripped)
+        if sm:
+            lines.append(f"--- {sm.group(1)}")
+
+        # HTML <field> tags
+        fields = _field_re.findall(stripped)
+        if fields:
+            parts = [f"{n}{'*' if 'required' in r else ''}" for n, r in fields]
+            lines.append(' | '.join(parts))
+        elif not stripped.startswith('<'):
+            # Inline DSL text (not an HTML tag)
+            lines.append(stripped)
+
+    return '\n'.join(lines)
+
+
+def parse_detail_html(markup: str) -> list[dict]:
+    """Convert <detail> HTML markup to tab definitions list.
+
+    Example input:
+        <detail>
+          <tab title="基本信息">
+            <field name="employee_no" /><field name="name" />
+            <field name="gender" /><field name="phone" />
+            <js-item title="画像">等级标签+状态</js-item>
+          </tab>
+          <tab title="考勤" assoc="attendance" collection="nb_hrm_attendance"
+               fields="date,status,check_in" />
+        </detail>
+
+    Returns:
+        [
+            {"title": "基本信息", "fields": "employee_no | name\\ngender | phone",
+             "js_items": [{"title": "画像", "desc": "等级标签+状态"}]},
+            {"title": "考勤", "assoc": "attendance", "coll": "nb_hrm_attendance",
+             "fields": ["date", "status", "check_in"]}
+        ]
+    """
+    markup = _sanitize_markup(markup)
+
+    _attr_re = re.compile(r'([\w-]+)="([^"]*)"')
+    _tab_self = re.compile(r'<tab\b([^>]*)/>',  re.IGNORECASE)
+    _tab_open = re.compile(r'<tab\b([^>]*)>',   re.IGNORECASE)
+    _tab_close = re.compile(r'</tab>',           re.IGNORECASE)
+    _field_re = re.compile(r'<field\s+name="([^"]+)"([^/]*)/>')
+    _js_item_re = re.compile(
+        r'<js-item\s+title="([^"]+)">(.*?)</js-item>', re.DOTALL)
+    _subtable_re = re.compile(r'<(?:sub)?table\b([^/]*)/?>')
+
+    tabs: list[dict] = []
+    in_tab = False
+    tab_attrs: dict = {}
+    tab_lines: list[str] = []
+
+    for raw in markup.strip().splitlines():
+        line = raw.strip()
+        if not line or line.lower().startswith(('<detail', '</detail')):
+            continue
+
+        if not in_tab:
+            # Self-closing tab
+            m = _tab_self.search(line)
+            if m:
+                attrs = dict(_attr_re.findall(m.group(1)))
+                tabs.append(_build_tab_def(attrs, [], _field_re, _js_item_re,
+                                           _subtable_re, _attr_re))
+                continue
+            # Opening tab
+            m = _tab_open.search(line)
+            if m:
+                in_tab = True
+                tab_attrs = dict(_attr_re.findall(m.group(1)))
+                tab_lines = []
+                continue
+        else:
+            if _tab_close.search(line):
+                tabs.append(_build_tab_def(tab_attrs, tab_lines, _field_re,
+                                           _js_item_re, _subtable_re, _attr_re))
+                in_tab = False
+                continue
+            tab_lines.append(line)
+
+    return tabs
+
+
+def _build_tab_def(
+    attrs: dict, content_lines: list[str],
+    _field_re: re.Pattern, _js_item_re: re.Pattern,
+    _subtable_re: re.Pattern, _attr_re: re.Pattern,
+) -> dict:
+    """Build a single tab definition from parsed attributes and content lines."""
+    tab: dict = {"title": attrs.get("title", "Tab")}
+
+    # Subtable tab (has assoc attribute)
+    if attrs.get("assoc"):
+        tab["assoc"] = attrs["assoc"]
+        tab["coll"] = attrs.get("collection", "")
+        fields_str = attrs.get("fields", "")
+        tab["fields"] = [f.strip() for f in fields_str.split(",") if f.strip()]
+        return tab
+
+    # Field-based tab
+    content = '\n'.join(content_lines)
+    field_rows: list[str] = []
+    js_items: list[dict] = []
+    _section_re = re.compile(r'<section\s+title="([^"]+)"')
+
+    # Extract js-items from full content
+    for jm in _js_item_re.finditer(content):
+        js_items.append({"title": jm.group(1), "desc": jm.group(2).strip()})
+
+    # Extract fields line-by-line
+    for line in content_lines:
+        # Section headers → DSL dividers
+        sm = _section_re.search(line)
+        if sm:
+            field_rows.append(f"--- {sm.group(1)}")
+
+        fields = _field_re.findall(line)
+        if fields:
+            parts = [n for n, _ in fields]
+            field_rows.append(' | '.join(parts))
+        elif not line.startswith('<') and line.strip():
+            # Inline DSL text
+            field_rows.append(line.strip())
+
+    fields_dsl = '\n'.join(field_rows) if field_rows else attrs.get("fields", "")
+    tab["fields"] = fields_dsl
+
+    if js_items:
+        tab["js_items"] = js_items
+
+    return tab
+
+
 class PageMarkupParser:
     """Parse XML markup into TreeNode tree + metadata."""
 
