@@ -899,7 +899,16 @@ class TreeBuilder:
         return ea
 
     def _build_tab_blocks(self, bg: TreeNode, coll: str, tab: dict) -> list[TreeNode]:
-        """Build blocks inside a BlockGridModel for detail popup tab."""
+        """Build blocks inside a BlockGridModel for detail popup tab.
+
+        Delegates to _build_block for shared block types (js, kpi, details,
+        sub_table, table, filter, outline). Popup-specific form type
+        (EditFormModel with resource_init_with_tk) is handled inline.
+
+        Supports multi-row layout via _row/_span markers on block defs
+        (set by markup_parser._parse_detail when parsing <row> elements).
+        Falls back to single-row auto-sized layout for backward compat.
+        """
         blocks = tab.get("blocks")
         if blocks is None:
             if "assoc" in tab:
@@ -907,60 +916,79 @@ class TreeBuilder:
                            "coll": tab["coll"], "fields": tab["fields"],
                            "title": tab.get("title")}]
             else:
-                blocks = [{"type": "details", "fields": tab["fields"]}]
+                blocks = [{"type": "details", "fields": tab.get("fields", "")}]
 
         block_nodes = []
+        # Track row groups: list of (node, row_idx, span)
+        node_layout = []
+        meta, warnings = {}, []
+
         for bi, blk in enumerate(blocks):
             btype = blk.get("type", "details")
+            bdef = dict(blk)
 
-            if btype == "details":
-                det_sp: dict[str, Any] = STEP_PARAMS_TEMPLATES["resource_init_with_tk"](coll)
-                if blk.get("title"):
-                    det_sp.update(STEP_PARAMS_TEMPLATES["card_title"](blk["title"]))
-                det = TreeNode("DetailsBlockModel", det_sp, bi)
-                bg.add_child("items", "array", det)
+            # Inject collection for collection-based types
+            if "collection" not in bdef:
+                bdef["collection"] = coll
+            if btype == "sub_table" and "parent_coll" not in bdef:
+                bdef["parent_coll"] = coll
 
-                dg = self.detail_grid(coll, blk["fields"])
-                det.add_child("grid", "object", dg)
-                block_nodes.append(det)
-
-            elif btype == "js":
-                js_sp: dict[str, Any] = STEP_PARAMS_TEMPLATES["js_code"](blk.get("code", ""))
-                if blk.get("title"):
-                    js_sp.update(STEP_PARAMS_TEMPLATES["card_title"](blk["title"]))
-                js_node = TreeNode("JSBlockModel", js_sp, bi)
-                bg.add_child("items", "array", js_node)
-                block_nodes.append(js_node)
-
-            elif btype == "sub_table":
-                sub_tbl = self._sub_table_node(
-                    coll, blk["assoc"], blk["coll"], blk["fields"],
-                    blk.get("title"), bi)
-                bg.add_child("items", "array", sub_tbl)
-
-                # AddNew form for sub-table
-                af = blk.get("addnew_fields") or blk["fields"]
-                if af:
-                    sub_addnew = sub_tbl._addnew
-                    addnew_cp = self.addnew_form(blk["coll"], af,
-                                                  required={af[0]} if af else set())
-                    sub_addnew.add_child("page", "object", addnew_cp)
-
-                block_nodes.append(sub_tbl)
-
-            elif btype == "form":
+            # Popup-specific edit form (EditFormModel + resource_init_with_tk)
+            if btype == "form" and bdef.get("popup", True):
                 fm = TreeNode("EditFormModel",
                               STEP_PARAMS_TEMPLATES["resource_init_with_tk"](coll), bi)
                 bg.add_child("items", "array", fm)
                 fm.add_child("actions", "array", TreeNode("FormSubmitActionModel", {}, 0))
-                req = set(blk.get("required", []))
-                fg = self.form_grid(coll, blk["fields"], req, props=blk.get("props"))
+                req = set(bdef.get("required", []))
+                fg = self.form_grid(coll, bdef.get("fields", ""), req,
+                                    props=bdef.get("props"))
                 fm.add_child("grid", "object", fg)
                 block_nodes.append(fm)
+                node_layout.append((fm, blk.get("_row"), blk.get("_span")))
+                continue
 
-        # Multi-block layout
+            # Delegate to shared _build_block
+            node = self._build_block(btype, bdef, bi, meta, warnings)
+            bg.add_child("items", "array", node)
+            block_nodes.append(node)
+            node_layout.append((node, blk.get("_row"), blk.get("_span")))
+
+        # ── Layout ──
+        has_row_markers = any(nl[1] is not None for nl in node_layout)
         tab_sizes = tab.get("sizes")
-        if len(block_nodes) > 1 or tab_sizes:
+
+        if has_row_markers:
+            # Multi-row layout from _row/_span markers
+            row_groups: list[list[tuple[TreeNode, int | None]]] = []
+            current_row_idx = None
+            current_group: list[tuple[TreeNode, int | None]] = []
+            for node, row_idx, span in node_layout:
+                if row_idx is not None and row_idx == current_row_idx:
+                    current_group.append((node, span))
+                else:
+                    if current_group:
+                        row_groups.append(current_group)
+                    current_group = [(node, span)]
+                    current_row_idx = row_idx
+            if current_group:
+                row_groups.append(current_group)
+
+            rows, sizes = {}, {}
+            for group in row_groups:
+                row_id = uid()
+                row_cols = [[item[0].uid] for item in group]
+                if all(item[1] for item in group):
+                    row_sizes = [item[1] for item in group]
+                else:
+                    n = len(group)
+                    row_sizes = [24 // n] * n
+                    row_sizes[-1] = 24 - sum(row_sizes[:-1])
+                rows[row_id] = row_cols
+                sizes[row_id] = row_sizes
+            bg.step_params = {"gridSettings": {"grid": {"rows": rows, "sizes": sizes}}}
+
+        elif len(block_nodes) > 1 or tab_sizes:
+            # Legacy single-row layout (backward compat)
             row_id = uid()
             row_cols = [[bn.uid] for bn in block_nodes]
             if tab_sizes:
@@ -1387,7 +1415,7 @@ class TreeBuilder:
         Validates collection existence for collection-based blocks.
         """
         # Validate collection exists for collection-based block types
-        coll_types = {"table", "filter", "form", "detail", "kpi"}
+        coll_types = {"table", "filter", "form", "detail", "details", "kpi"}
         if btype in coll_types:
             coll = bdef.get("collection", "")
             if coll and not self._valid_collection(coll):
@@ -1459,6 +1487,28 @@ class TreeBuilder:
                 bdef.get("ctx_info", {}),
                 sort=sort,
             )
+
+        elif btype == "details":
+            coll = bdef["collection"]
+            det_sp: dict[str, Any] = STEP_PARAMS_TEMPLATES["resource_init_with_tk"](coll)
+            if bdef.get("title"):
+                det_sp.update(STEP_PARAMS_TEMPLATES["card_title"](bdef["title"]))
+            det = TreeNode("DetailsBlockModel", det_sp, sort)
+            dg = self.detail_grid(coll, bdef.get("fields", ""))
+            det.add_child("grid", "object", dg)
+            return det
+
+        elif btype == "sub_table":
+            parent_coll = bdef.get("parent_coll", bdef.get("collection", ""))
+            node = self._sub_table_node(
+                parent_coll, bdef["assoc"], bdef["coll"], bdef["fields"],
+                bdef.get("title"), sort)
+            af = bdef.get("addnew_fields") or bdef["fields"]
+            if af and hasattr(node, "_addnew"):
+                addnew_cp = self.addnew_form(bdef["coll"], af,
+                                              required={af[0]} if af else set())
+                node._addnew.add_child("page", "object", addnew_cp)
+            return node
 
         else:
             raise ValueError(f"unknown block type: '{btype}'")

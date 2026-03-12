@@ -184,11 +184,62 @@ ctx.render(
 
 ---
 
+## ctx.popup — Popup Record Context
+
+When a JS block is inside a **detail popup** (ChildPageModel), use `ctx.popup` to access the current record.
+
+> **WARNING**: `ctx.record` does NOT work in JSBlockModel inside popups! JSBlockModel is a **sibling** of DetailsBlockModel, not its child — the delegate chain does not reach it.
+
+### Getting the Current Record
+```js
+// Step 1: Get popup context (async!)
+const popup = await ctx.popup;
+const recordId = popup?.resource?.filterByTk;
+
+if (!recordId) {
+  ctx.render(<div style={{ color: '#999' }}>No record</div>);
+  return;
+}
+
+// Step 2: Fetch full record with relations
+const res = await ctx.request({
+  url: 'my_collection:get',
+  params: { filterByTk: recordId, appends: ['department', 'position'] }
+});
+const record = res?.data?.data || {};
+
+// Step 3: Render with record data
+ctx.render(<Card>{record.name}</Card>);
+```
+
+### ctx.popup Properties
+
+| Property | Description |
+|----------|-------------|
+| `popup.record` | Current popup record data (all fields) |
+| `popup.resource.filterByTk` | Record primary key (ID) |
+| `popup.resource.collectionName` | Collection name |
+| `popup.resource.dataSourceKey` | Data source (usually `"main"`) |
+| `popup.sourceRecord` | Parent record (if opened from association) |
+| `popup.parent` | Parent popup context (for nested popups) |
+| `popup.parent.record` | Grandparent record |
+
+### When to Use What
+
+| Context | API | Notes |
+|---------|-----|-------|
+| **JSColumn** (table cell) | `ctx.record` | Row data, always available |
+| **JSItem** (inside DetailsBlock) | `ctx.record` | Inherited from DetailsBlockModel via delegate chain |
+| **JSBlock** (standalone, page level) | `ctx.request()` | No record context, fetch your own data |
+| **JSBlock** (inside popup) | `await ctx.popup` | **Must use popup**, ctx.record is undefined |
+
+---
+
 ## Context by Scenario
 
 | Scenario | Available | Key Properties |
 |----------|-----------|----------------|
-| **JSBlock** | render, request, libs, requireAsync, importAsync, element, message, notification, modal | Full rendering + data |
+| **JSBlock** | render, request, libs, requireAsync, importAsync, element, message, notification, modal, popup | Full rendering + data |
 | **JSColumn** | render, record, value, libs | `ctx.record` = row data, `ctx.value` = cell value |
 | **JSField / JSItem** | render, record, value, libs, model | Field display customization |
 | **FormJSFieldItem** | render, record, value, model, form | Form field with linkage |

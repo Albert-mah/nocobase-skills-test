@@ -2406,8 +2406,9 @@ class NB:
             if not is_js_placeholder and not event_placeholders:
                 continue
 
-            # Find collection from parent chain
+            # Find collection and popup context from parent chain
             collection = ""
+            in_popup = False
             visited = set()
             p = parent_uid
             while p and p not in visited:
@@ -2415,6 +2416,8 @@ class NB:
                 pm = uid_map.get(p)
                 if not pm:
                     break
+                if pm.get("use") == "ChildPageModel":
+                    in_popup = True
                 rs = pm.get("stepParams", {}).get("resourceSettings", {}).get("init", {})
                 if rs.get("collectionName"):
                     collection = rs["collectionName"]
@@ -2447,6 +2450,7 @@ class NB:
                     "meta": extra_meta,
                     "collection": collection,
                     "parent_uid": parent_uid,
+                    "in_popup": in_popup,
                 })
 
             for ep in event_placeholders:
@@ -2576,6 +2580,42 @@ class NB:
                 f"For ECharts: document.createElement('div') + ctx.render(container) + echarts.init(container). "
                 f"See ref/js-patterns.md and ref/js-sandbox.md."
             )
+
+        # Warn: JS block inside popup using ctx.record instead of ctx.popup
+        # ctx.record is only available inside DetailsBlockModel's child tree,
+        # NOT for sibling JSBlockModel in the same popup tab.
+        # Correct pattern: const popup = await ctx.popup; const id = popup?.resource?.filterByTk;
+        if "ctx.record" in code:
+            # Check if this node is inside a popup (has ChildPageModel ancestor)
+            data = self._get_json(f"api/flowModels:get?filterByTk={uid_}")
+            if data:
+                use = data.get("use", "")
+                if use in ("JSBlockModel",):
+                    # Walk parent chain to detect popup context
+                    p = data.get("parentId", "")
+                    all_models = self._list_all()
+                    uid_map = {m["uid"]: m for m in all_models}
+                    in_popup = False
+                    visited = set()
+                    while p and p not in visited:
+                        visited.add(p)
+                        pm = uid_map.get(p)
+                        if not pm:
+                            break
+                        if pm.get("use") == "ChildPageModel":
+                            in_popup = True
+                            break
+                        p = pm.get("parentId", "")
+                    if in_popup:
+                        self.warnings.append(
+                            f"WARNING [{uid_}]: JSBlockModel inside popup uses ctx.record, "
+                            f"which may be undefined. JSBlockModel is a sibling of DetailsBlockModel, "
+                            f"not its child — ctx.record delegate chain does not reach it. "
+                            f"Use instead: const popup = await ctx.popup; "
+                            f"const id = popup?.resource?.filterByTk; "
+                            f"then ctx.request({{url:'COLLECTION:get', params:{{filterByTk:id}}}}) "
+                            f"to fetch record data."
+                        )
 
         return self.update_js(uid_, code)
 
@@ -2724,6 +2764,7 @@ class NB:
                     continue
 
             # --- Blocks / Items (unmatched): write stub ---
+            in_popup = p.get("in_popup", False)
             fpath = os.path.join(output_dir, f"{uid_}.js")
             with open(fpath, "w") as f:
                 f.write(
@@ -2732,11 +2773,17 @@ class NB:
                     f"// Collection: {collection}\n"
                     f"// Kind: {kind}\n"
                 )
+                if in_popup:
+                    f.write(
+                        f"// Context: detail popup (record-aware)\n"
+                        f"// const recordId = ctx.view?.inputArgs?.filterByTk;\n"
+                    )
             manual.append({
                 "uid": uid_, "kind": kind,
                 "title": title, "desc": desc,
                 "file": os.path.basename(fpath),
                 "collection": collection,
+                "in_popup": in_popup,
             })
 
         # Build markdown task table — items before blocks before events

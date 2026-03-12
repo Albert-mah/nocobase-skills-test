@@ -634,8 +634,118 @@ class PageMarkupParser:
         return self.tb.placeholder_js_col(title, field, desc, col_type=col_type,
                                           meta=m, sort=sort, width=width)
 
+    def _parse_tab_child(self, el: ET.Element, coll: str,
+                         row_idx: int | None = None) -> list[dict]:
+        """Parse a single child element inside a <tab> into block def(s).
+
+        Supports the same elements as _parse_element (kpi, filter, js-block,
+        detail-block, form, subtable, js-item) plus <row> for layout grouping.
+
+        Returns a list of block defs (usually 1, but <row> returns multiple
+        with _row/_span markers for multi-row layout in _build_tab_blocks).
+        """
+        tag = el.tag
+        el_coll = el.get("collection", coll)
+
+        if tag == "subtable":
+            sub_coll = el.get("collection", "")
+            sub_fields = self._split_fields(el.get("fields", ""))
+            assoc = el.get("assoc", "")
+            blk: dict[str, Any] = {
+                "type": "sub_table", "assoc": assoc,
+                "coll": sub_coll, "fields": sub_fields,
+                "title": el.get("title"),
+            }
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "js-item":
+            title = el.get("title", "JS Item")
+            desc = (el.text or "").strip()
+            code = self.tb._placeholder_code(title, desc, "item")
+            blk = {"type": "js", "title": title, "code": code,
+                   "collection": el_coll}
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "js-block":
+            title = el.get("title", "JS Block")
+            desc = (el.text or "").strip()
+            code = self.tb._placeholder_code(title, desc, "block")
+            blk = {"type": "js", "title": title, "code": code,
+                   "collection": el_coll}
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "kpi":
+            title = el.get("title", "Count")
+            filter_str = el.get("filter")
+            filter_ = self._parse_kpi_filter(filter_str) if filter_str else None
+            color = el.get("color")
+            blk = {"type": "kpi", "title": title, "collection": el_coll,
+                   "filter": filter_, "color": color}
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "filter":
+            fields = self._split_fields(el.get("fields", "name"))
+            blk = {"type": "filter", "collection": el_coll, "fields": fields}
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "detail-block":
+            fields_dsl = el.get("fields", "")
+            title = el.get("title")
+            blk = {"type": "details", "fields": fields_dsl,
+                   "collection": el_coll}
+            if title:
+                blk["title"] = title
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "form":
+            fields_dsl = el.get("fields", "")
+            req_str = el.get("required", "")
+            required = list(req_str.split(",")) if req_str else []
+            blk = {"type": "form", "fields": fields_dsl,
+                   "collection": el_coll, "required": required}
+            if row_idx is not None:
+                blk["_row"] = row_idx
+                blk["_span"] = int(el.get("span", 0)) or None
+            return [blk]
+
+        elif tag == "row":
+            # <row> groups children into a single layout row with spans
+            result = []
+            # Use a unique row index for grouping
+            r_idx = id(el)  # unique per <row> element
+            for child in el:
+                child_blocks = self._parse_tab_child(child, coll,
+                                                      row_idx=r_idx)
+                result.extend(child_blocks)
+            return result
+
+        return []
+
     def _parse_detail(self, detail_el: ET.Element, coll: str) -> list[dict]:
-        """Parse <detail> → list of tab defs for detail_popup()."""
+        """Parse <detail> → list of tab defs for detail_popup().
+
+        Supports the same block types as page-level _parse_element inside
+        <tab> children: kpi, filter, js-block, detail-block, form, subtable,
+        js-item, and <row> for side-by-side layout.
+        """
         tabs = []
         for tab_el in detail_el:
             if tab_el.tag != "tab":
@@ -644,43 +754,15 @@ class PageMarkupParser:
             fields_dsl = tab_el.get("fields", "")
             tab_def: dict[str, Any] = {"title": tab_title}
 
-            # Check for sub-elements (subtable, js-item, etc.)
-            blocks = []
+            blocks: list[dict] = []
             has_fields = bool(fields_dsl)
 
             if has_fields:
                 blocks.append({"type": "details", "fields": fields_dsl})
 
             for child in tab_el:
-                if child.tag == "subtable":
-                    sub_coll = child.get("collection", "")
-                    sub_fields = self._split_fields(child.get("fields", ""))
-                    assoc = child.get("assoc", "")
-                    blocks.append({
-                        "type": "sub_table",
-                        "assoc": assoc,
-                        "coll": sub_coll,
-                        "fields": sub_fields,
-                        "title": child.get("title"),
-                    })
-                elif child.tag == "js-item":
-                    title = child.get("title", "JS Item")
-                    desc = (child.text or "").strip()
-                    code = self.tb._placeholder_code(title, desc, "item")
-                    blocks.append({
-                        "type": "js",
-                        "title": title,
-                        "code": code,
-                    })
-                elif child.tag == "js-block":
-                    title = child.get("title", "JS Block")
-                    desc = (child.text or "").strip()
-                    code = self.tb._placeholder_code(title, desc, "block")
-                    blocks.append({
-                        "type": "js",
-                        "title": title,
-                        "code": code,
-                    })
+                child_blocks = self._parse_tab_child(child, coll)
+                blocks.extend(child_blocks)
 
             if blocks:
                 if len(blocks) == 1 and blocks[0]["type"] == "details":
@@ -688,7 +770,6 @@ class PageMarkupParser:
                 else:
                     tab_def["blocks"] = blocks
                     if not has_fields:
-                        # Need at least something for the tab
                         tab_def["fields"] = ""
             else:
                 tab_def["fields"] = fields_dsl
@@ -696,7 +777,6 @@ class PageMarkupParser:
             tabs.append(tab_def)
 
         if not tabs:
-            # Fallback: single tab from detail element's own fields
             fields_dsl = detail_el.get("fields", "")
             tabs = [{"title": "Details", "fields": fields_dsl}]
 
