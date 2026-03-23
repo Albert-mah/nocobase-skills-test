@@ -583,6 +583,48 @@ def register_tools(mcp: FastMCP):
 
             results.append(f"[relations] {rel_ok} created, {rel_skip} skipped")
 
+        # Step 5: Validate datetime field utc settings
+        # Source of truth: datetime (with timezone) must have utc=true
+        # datetimeNoTz (without timezone) must have utc=false
+        try:
+            resp = client.get(f"/api/collections/{name}/fields:list?paginate=false")
+            dt_fields = resp.get("data", [])
+            utc_fixed = 0
+            for f in dt_fields:
+                iface = f.get("interface", "")
+                ui = f.get("uiSchema") or {}
+                props = ui.get("x-component-props") or {}
+                tz = f.get("timezone")
+                utc_val = props.get("utc")
+
+                # datetime + timezone=true must have utc=true
+                if iface == "datetime" and tz is True and utc_val is False:
+                    props["utc"] = True
+                    ui["x-component-props"] = props
+                    try:
+                        client.put(
+                            f"/api/collections/{name}/fields:update?filterByTk={f['name']}",
+                            {"uiSchema": ui})
+                        utc_fixed += 1
+                    except APIError:
+                        pass
+                # datetimeNoTz + timezone=false must have utc=false
+                elif iface == "datetimeNoTz" and tz is False and utc_val is True:
+                    props["utc"] = False
+                    ui["x-component-props"] = props
+                    try:
+                        client.put(
+                            f"/api/collections/{name}/fields:update?filterByTk={f['name']}",
+                            {"uiSchema": ui})
+                        utc_fixed += 1
+                    except APIError:
+                        pass
+
+            if utc_fixed:
+                results.append(f"[utc-fix] {utc_fixed} datetime fields corrected (utc mismatch)")
+        except APIError:
+            pass
+
         return f"{name}: " + " | ".join(results)
 
     @mcp.tool()
